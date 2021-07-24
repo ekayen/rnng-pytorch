@@ -676,12 +676,84 @@ class RNNGCell(nn.Module):
     # Input for rnn should be (beam_size, input_size). During beam search, new_input has different size.
     new_hidden, new_cell = self.stack_rnn(new_input.view(-1, self.input_size),
                                           (stack.hidden_head(1), stack.cell_head(1)))
-
     stack.update_hidden(new_hidden, new_cell)
 
     return stack.hidden_head()[..., -1]
 
+  
+class SpeechEncoder(nn.Module):
+  def __init__(self,
+               frames_size = 6,
+               dur_size = 2,
+               pause_vocab_size = 7,
+               pause_emb_size = 4,
+               filter_sizes = [5,10,25,50],
+               tok_frame_len = 100,
+               num_conv = 32,
+               num_channel_in = 1,
+               dropout = None,
+               speech_feat_types = [],
+               speech_emb_size = 128):
+               
+    super(SpeechEncoder,self).__init__()
+    self.frames_size = frames_size
+    self.dur_size = dur_size
+    self.pause_vocab_size = pause_vocab_size
+    self.pause_emb_size = pause_emb_size
+    self.filter_sizes = filter_sizes
+    self.tok_frame_len = tok_frame_len
+    self.num_conv = num_conv
+    self.num_channel_in = num_channel_in
+    self.dropout = nn.Dropout(dropout, inplace=True)
+    self.speech_feat_types = speech_feat_types
+    self.speech_emb_size = speech_emb_size
+    
+    self.pause_emb = nn.Sequential(nn.Embedding(self.pause_vocab_size,self.pause_emb_size),self.dropout)
+    
+    conv_modules = []
+    for filter_size in self.filter_sizes:
 
+      kernel = (self.frames_size,filter_size)
+      pool_kernel = (1,self.tok_frame_len - filter_size + 1)
+
+      filter_conv = nn.Sequential(
+        nn.Conv2d(self.num_channel_in,self.num_conv,kernel),
+        nn.ReLU(),
+        nn.MaxPool2d(pool_kernel, 1)
+      )
+      conv_modules.append(filter_conv)
+
+      self.conv_modules = nn.ModuleList(conv_modules)
+      self.ff = nn.Linear(self.speech_emb_size,self.speech_emb_size,bias=True)
+      
+  def forward(self, pause=None, dur=None, frames=None):
+    all_feats = []
+    
+    if 'pause' in self.speech_feat_types:
+      pause = self.pause_emb(pause)
+      all_feats.append(pause)
+    if 'dur' in self.speech_feat_types:
+      all_feats.append(dur)
+    if 'pitch' in self.speech_feat_types or 'fbank' in self.speech_feat_types:
+      conv_tokens = []
+      for token in frames:
+        conv_frames = [convolve(token) for convolve in self.conv_modules]
+        conv_frames = [x.squeeze(-1).squeeze(-1) for x in conv_frames]
+        conv_frames = torch.cat(conv_frames, -1)
+        conv_frames = conv_frames.view(conv_frames.shape[0],1,conv_frames.shape[1]) # add a dim for num tokens (1 inside for loop)
+        conv_tokens.append(conv_frames)
+      conv_tokens = torch.cat(conv_tokens,dim=1)
+      all_feats.append(conv_tokens)
+      
+    speech_vecs = torch.cat(all_feats,axis=-1).type(torch.float)
+    speech_vecs = self.ff(speech_vecs)
+    return speech_vecs
+
+
+    
+
+
+    
 class FixedStackRNNG(nn.Module):
   def __init__(self, action_dict,
                vocab = 100,
@@ -693,6 +765,7 @@ class FixedStackRNNG(nn.Module):
                attention_composition=False,
                max_open_nts = 100,
                max_cons_nts = 8,
+               speech_feat_types = None
   ):
     super(FixedStackRNNG, self).__init__()
     self.action_dict = action_dict
@@ -703,38 +776,94 @@ class FixedStackRNNG(nn.Module):
                                               ignore_index=padding_idx)
 
     self.dropout = nn.Dropout(dropout, inplace=True)
-    self.emb = nn.Sequential(
-      nn.Embedding(vocab, w_dim, padding_idx=padding_idx), self.dropout)
+    self.w_dim = w_dim
+    self.stack_emb_size = w_dim
+    
+    self.emb = nn.Sequential(nn.Embedding(vocab, w_dim, padding_idx=padding_idx), self.dropout)
 
-    self.rnng = RNNGCell(w_dim, h_dim, num_layers, dropout, self.action_dict, attention_composition)
+    
+    self.speech_feat_types = speech_feat_types
 
-    self.vocab_mlp = nn.Linear(w_dim, vocab)
+    if self.speech_feat_types:
+      self.pause_embedding_size = 4 # TODO make configurable
+      self.pause_vocab_size = 8
+      self.dur_size = 2
+      self.filter_sizes = [5,10,25,50]
+      self.num_conv = 32
+      self.num_channel_in = 1
+      self.tok_frame_len = 100
+      
+      self.speech_emb_size = 0
+      if 'pause' in self.speech_feat_types:
+        self.speech_emb_size += self.pause_embedding_size
+      if 'dur' in self.speech_feat_types:
+        self.speech_emb_size += self.dur_size
+      if 'pitch' in self.speech_feat_types or 'fbank' in self.speech_feat_types:
+        if 'pitch' in self.speech_feat_types and 'fbank' in self.speech_feat_types:
+          self.num_frame_feats = 6
+        else:
+          self.num_frame_feats = 3
+        self.speech_emb_size += 128
+
+      self.stack_emb_size += self.speech_emb_size
+
+      self.speech_encoder = SpeechEncoder(frames_size = self.num_frame_feats,
+                                          dur_size = self.dur_size,
+                                          pause_vocab_size = self.pause_vocab_size,
+                                          pause_emb_size = self.pause_embedding_size,
+                                          filter_sizes = self.filter_sizes,
+                                          tok_frame_len = self.tok_frame_len,
+                                          num_conv = self.num_conv,
+                                          num_channel_in = self.num_channel_in,
+                                          dropout = dropout,
+                                          speech_feat_types = self.speech_feat_types,
+                                          speech_emb_size = self.speech_emb_size)
+
+    
+    self.rnng = RNNGCell(self.stack_emb_size, h_dim, num_layers, dropout, self.action_dict, attention_composition)
+
+
+    #self.vocab_mlp = nn.Linear(w_dim, vocab)
+    self.vocab_mlp = nn.Linear(self.stack_emb_size, vocab)
     self.num_layers = num_layers
     self.num_actions = action_dict.num_actions()  # num_labels + 2
-    self.action_mlp = nn.Linear(w_dim, self.num_actions)
-    self.input_size = w_dim
+    #self.action_mlp = nn.Linear(w_dim, self.num_actions)
+    self.action_mlp = nn.Linear(self.stack_emb_size, self.num_actions)
+    self.input_size = self.stack_emb_size #w_dim
     self.hidden_size = h_dim
     self.vocab_mlp.weight = self.emb[0].weight
 
     self.max_open_nts = max_open_nts
     self.max_cons_nts = max_cons_nts
 
+
   def forward(self, x, actions, initial_stack = None, stack_size_bound = -1,
-              subword_end_mask = None):
+              subword_end_mask = None, pause=None, dur=None, frames=None):
     assert isinstance(x, torch.Tensor)
     assert isinstance(actions, torch.Tensor)
-
     if stack_size_bound <= 0:
       stack_size = max(100, x.size(1) + 10)
     else:
       stack_size = stack_size_bound
     stack = self.build_stack(x, stack_size)
-    word_vecs = self.emb(x)
-    action_contexts = self.unroll_states(stack, word_vecs, actions, subword_end_mask)
+    device = x.device
+    if self.speech_feat_types:
 
+      speech_vecs = self.speech_encoder(pause,dur,frames)
+      word_vecs = self.emb(x)
+      input_vecs = torch.cat((word_vecs,speech_vecs),2)
+    else:
+      input_vecs = self.emb(x)
+
+
+      
+    action_contexts = self.unroll_states(stack, input_vecs, actions, subword_end_mask) 
+
+    
     a_loss, _ = self.action_loss(actions, self.action_dict, action_contexts)
     w_loss, _ = self.word_loss(x, actions, self.action_dict, action_contexts)
     loss = (a_loss.sum() + w_loss.sum())
+
     return loss, a_loss, w_loss, stack
 
   def unroll_states(self, stack, word_vecs, actions, subword_end_mask = None):
@@ -743,7 +872,7 @@ class FixedStackRNNG(nn.Module):
     for step in range(actions.size(1)-1):
       h = self.rnng(word_vecs, actions[:, step], stack, subword_end_mask)  # (batch_size, input_size)
       hs[step+1] = h
-    hs = self.rnng.output(hs.transpose(1, 0).contiguous())  # (batch_size, action_len, input_size)
+    hs = self.rnng.output(hs.transpose(1, 0).contiguous())  # (batch_size, action_len, input_size) 
     return hs
 
   def build_stack(self, x, stack_size = 80):
@@ -754,12 +883,10 @@ class FixedStackRNNG(nn.Module):
     assert hiddens.size()[:2] == actions.size()
     actions = actions.view(-1)
     hiddens = hiddens.view(actions.size(0), -1)
-
     action_mask = actions != action_dict.padding_idx
     idx = action_mask.nonzero(as_tuple=False).squeeze(1)
     actions = actions[idx]
     hiddens = hiddens[idx]
-
     logit = self.action_mlp(hiddens)
     loss = self.action_criterion(logit, actions)
     return loss, logit
@@ -772,10 +899,10 @@ class FixedStackRNNG(nn.Module):
     action_mask = actions == action_dict.a2i['SHIFT']
     idx = action_mask.nonzero(as_tuple=False).squeeze(1)
     hiddens = hiddens[idx]
-
     x = x.view(-1)
     x = x[x != self.padding_idx]
     assert x.size(0) == hiddens.size(0)
+
     logit = self.vocab_mlp(hiddens)
     loss = self.word_criterion(logit, x)
     return loss, logit

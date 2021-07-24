@@ -88,12 +88,13 @@ class FixedStackInOrderRNNG(FixedStackRNNG):
                attention_composition = False,
                max_open_nts = 100,
                max_cons_nts = 3,
+               speech_feat_types = None
   ):
     super(FixedStackInOrderRNNG, self).__init__(
         action_dict, vocab, padding_idx,
         w_dim, h_dim, num_layers,
         dropout, attention_composition,
-        max_open_nts, max_cons_nts)
+        max_open_nts, max_cons_nts,speech_feat_types)
 
   def build_stack(self, x, batch_size = None):
     stack_size = max(150, x.size(1) + 10)

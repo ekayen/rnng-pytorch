@@ -150,10 +150,23 @@ def find_nts_in_tree(tree):
     tree = tree.strip()
     return re.findall(r'(?=\(([^\s]+)\s\()', tree)
 
+def pad_tok_frames(tok_frames,padded_len=350):
+    if padded_len >= tok_frames.shape[-1]:
+        padded = np.pad(tok_frames,((0,0),(0,padded_len-tok_frames.shape[-1])))
+    else:
+        print(f'pad size too small: {tok_frames.shape}')
+        padded = tok_frames
+    return padded
+
+
 def get_sent_info(arg):
-    tree, setting = arg
+    if len(arg) == 3:
+        tree, setting, idnum = arg
+    else:
+        tree, setting = arg
+        idnum = ''
     tree = tree.strip()
-    lowercase, replace_num, vocab, sp, action_dict, io_action_dict = setting
+    lowercase, replace_num, vocab, sp, action_dict, io_action_dict,speech_feats = setting
     if sp is not None:
         # use sentencepiece
         tree = transform_to_subword_tree(tree, sp)
@@ -183,7 +196,8 @@ def get_sent_info(arg):
     top_down_action_ids = action_dict.to_id(top_down_actions)
     in_order_action_ids = io_action_dict.to_id(in_order_actions)
 
-    return {
+    
+    return_dict =  {
         'orig_tokens': orig_tokens,
         'tokens': conved_tokens,
         'token_ids': token_ids,
@@ -194,8 +208,18 @@ def get_sent_info(arg):
         'in_order_actions': in_order_actions,
         'in_order_action_ids': in_order_action_ids,
         'in_order_max_stack_size': in_order_max_stack_size,
-        'tree_str': tree
-    }
+        'tree_str': tree    }
+
+    if idnum:
+        return_dict['idnum'] = idnum
+        #return_dict['pitch'] = [pad_tok_frames(feats).tolist() for feats in speech_feats[idnum]['pitch']]
+        #return_dict['fbank'] = [pad_tok_frames(feats).tolist() for feats in speech_feats[idnum]['fbank']]
+        return_dict['pitch'] = [feats.tolist() for feats in speech_feats[idnum]['pitch']]
+        return_dict['fbank'] = [feats.tolist() for feats in speech_feats[idnum]['fbank']]
+        return_dict['pause'] = speech_feats[idnum]['pause']
+        return_dict['dur'] = [feats.tolist() for feats in speech_feats[idnum]['dur']]
+    
+    return return_dict
 
 def make_vocab(textfile, seqlength, minseqlength, lowercase, replace_num,
                vocabsize, vocabminfreq, unkmethod, jobs, apply_length_filter=True):
@@ -267,10 +291,10 @@ def get_data(args):
         return nts
 
     def convert(textfile, lowercase, replace_num, seqlength, minseqlength,
-                outfile, vocab, sp, action_dict, io_action_dict, apply_length_filter=True, jobs=-1):
+                outfile, vocab, sp, action_dict, io_action_dict, apply_length_filter=True, jobs=-1,speech_feats={},id_file=''):
         dropped = 0
         num_sents = 0
-        conv_setting = (lowercase, replace_num, vocab, sp, action_dict, io_action_dict)
+        conv_setting = (lowercase, replace_num, vocab, sp, action_dict, io_action_dict,speech_feats)
         def process_block(tree_with_settings, f):
             _dropped = 0
             with Pool(jobs) as pool:
@@ -283,12 +307,16 @@ def get_data(args):
                     sent_info['key'] = 'sentence'
                     f.write(json.dumps(sent_info)+'\n')
             return _dropped
-
+        if id_file: ids = [l.strip() for l in open(id_file,'r').readlines()]
         with open(outfile, 'wt') as f, open(textfile, 'r') as in_f:
             block_size = 100000
             tree_with_settings = []
-            for tree in in_f:
-                tree_with_settings.append((tree, conv_setting))
+            for idx,tree in enumerate(in_f):
+                if id_file:
+                    idnum = ids[idx].strip()
+                    tree_with_settings.append((tree, conv_setting,idnum))
+                else:
+                    tree_with_settings.append((tree, conv_setting))
                 if len(tree_with_settings) >= block_size:
                     dropped += process_block(tree_with_settings, f)
                     num_sents += len(tree_with_settings)
@@ -339,15 +367,65 @@ def get_data(args):
         print("Vocab size: {}".format(len(vocab.i2w)))
         sp = None
 
+    def load_sp_feats(directory,split):
+        partition = pickle.load(open(os.path.join(directory,f'{split}_partition.pickle'),'rb'))
+        pitch = pickle.load(open(os.path.join(directory,f'{split}_pitch.pickle'),'rb'))
+        fbank = pickle.load(open(os.path.join(directory,f'{split}_fbank.pickle'),'rb'))
+        pause = pickle.load(open(os.path.join(directory,f'{split}_pause.pickle'),'rb'))
+        duration = pickle.load(open(os.path.join(directory,f'{split}_duration.pickle'),'rb'))
+        out_dict = {}
+        for idnum in pause: # iterate over all sents or turns
+            out_dict[idnum] = {}
+                
+            part = partition[idnum]
+            pit = pitch[idnum]
+            fb = fbank[idnum]
+            pau = pause[idnum]
+            dur = duration[idnum]
+            pit_tok = []
+            fb_tok = []
+            pau_tok = []
+            dur_tok = []
+            for idx,prt in enumerate(part):
+                start,end = prt
+                pau_tok.append(pau['pause_aft'][idx])
+                dur_tok.append(dur[:,idx])
+                pit_tok.append(pit[:,start:end]) # TODO here is where I'll add different sizes of context window
+                fb_tok.append(fb[:,start:end]) # here too
+                    
+            out_dict[idnum]['pause'] = pau_tok
+            out_dict[idnum]['pitch'] = pit_tok
+            out_dict[idnum]['fbank'] = fb_tok
+            out_dict[idnum]['dur'] = dur_tok
+        return out_dict
+
+        
+    if args.speech_dir:
+        train_sp_feats = load_sp_feats(args.speech_dir,'train') if args.speech_dir else {}
+        dev_sp_feats = load_sp_feats(args.speech_dir,'dev') if args.speech_dir else {}
+        test_sp_feats = load_sp_feats(args.speech_dir,'test') if args.speech_dir else {}
+
+        train_id_file = os.path.join(args.speech_dir,'train_sent_ids.txt')
+        dev_id_file = os.path.join(args.speech_dir,'dev_sent_ids.txt')
+        test_id_file = os.path.join(args.speech_dir,'test_sent_ids.txt')
+    else:
+        train_sp_feats = {}
+        dev_sp_feats = {}
+        test_sp_feats = {}
+
+        train_id_file = ''
+        dev_id_file = ''
+        test_id_file = ''
+
     convert(args.testfile, args.lowercase, args.replace_num,
             0, args.minseqlength, args.outputfile + "-test.json",
-            vocab, sp, action_dict, io_action_dict, 0, args.jobs)
+            vocab, sp, action_dict, io_action_dict, 0, args.jobs,test_sp_feats,test_id_file)
     convert(args.valfile, args.lowercase, args.replace_num,
-            args.seqlength, args.minseqlength, args.outputfile + "-val.json",
-            vocab, sp, action_dict, io_action_dict, 0, args.jobs)
+            args.seqlength, args.minseqlength, args.outputfile + "-dev.json",
+            vocab, sp, action_dict, io_action_dict, 0, args.jobs,dev_sp_feats,dev_id_file)
     convert(args.trainfile, args.lowercase, args.replace_num,
             args.seqlength,  args.minseqlength, args.outputfile + "-train.json",
-            vocab, sp, action_dict, io_action_dict, 1, args.jobs)
+            vocab, sp, action_dict, io_action_dict, 1, args.jobs,train_sp_feats,train_id_file)
 
 def main(arguments):
     parser = argparse.ArgumentParser(
@@ -390,6 +468,8 @@ def main(arguments):
                                             "If unkmethod=subword, this argument specifies learned sentencepiece model.",
                                             type = str, default='')
     parser.add_argument('--jobs', type=int, default=-1)
+    parser.add_argument('--id_file',type=str,default='')
+    parser.add_argument('--speech_dir',type=str,default='')
     args = parser.parse_args(arguments)
     if args.jobs == -1:
         args.jobs = len(os.sched_getaffinity(0))

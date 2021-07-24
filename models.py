@@ -177,6 +177,7 @@ class TopDownRNNG(nn.Module):
                attention_composition=False,
                max_open_nts = 100,
                max_cons_nts = 8,
+               speech_feats = None
   ):
     super(TopDownRNNG, self).__init__()
     self.action_dict = action_dict
@@ -205,8 +206,11 @@ class TopDownRNNG(nn.Module):
                         LSTMComposition(w_dim, dropout))
     self.max_open_nts = max_open_nts
     self.max_cons_nts = max_cons_nts
-
+    self.speech_feats = speech_feats
+    
     self.initial_emb = nn.Sequential(nn.Embedding(1, w_dim), self.dropout)
+
+    # TODO put in the CNN and pause emb layers here
 
   def forward(self, x, actions, initial_stack = None, stack_size_bound = -1, subword_end_mask = None):
     assert isinstance(x, torch.Tensor)
@@ -221,6 +225,9 @@ class TopDownRNNG(nn.Module):
     loss = (a_loss.sum() + w_loss.sum())
     return loss, a_loss, w_loss, states
 
+  def gen_speech_feats(self,sent_id):
+    pass
+  
   def unroll_states(self, states, word_vecs, actions):
     hs = [self.stack_top_h(states)]
     step = 0

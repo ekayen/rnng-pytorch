@@ -151,7 +151,7 @@ class SentencePieceVocabulary(object):
 class Sentence(object):
   def __init__(self, orig_tokens, tokens, token_ids, tags,
                actions=None, action_ids=None, tree_str=None,
-               max_stack_size=-1, is_subword_end=None):
+               max_stack_size=-1, is_subword_end=None,idnum='',speech_feats={}):
     self.orig_tokens = orig_tokens
     self.tokens = tokens
     self.token_ids = token_ids
@@ -160,6 +160,8 @@ class Sentence(object):
     self.action_ids = action_ids or []
     self.tree_str = tree_str  # original annotation
     self.max_stack_size = max_stack_size
+    self.idnum = idnum
+    self.speech_feats = speech_feats
 
     if is_subword_end is not None:
       assert isinstance(is_subword_end, list)
@@ -176,7 +178,26 @@ class Sentence(object):
     elif oracle == 'in_order':
       actions = j.get('in_order_actions', [])
       action_ids = j.get('in_order_action_ids', [])
-    return Sentence(j['orig_tokens'],
+    speech_feats = {}
+    if 'pause' in j:
+      speech_feats['pause'] = j.get('pause')
+      speech_feats['pitch'] = [np.array(feat) for feat in j.get('pitch')]
+      speech_feats['fbank'] = [np.array(feat) for feat in j.get('fbank')]
+      speech_feats['dur'] = [np.array(feat) for feat in j.get('dur')]
+      
+      sent = Sentence(j['orig_tokens'],
+                    j['tokens'],
+                    j['token_ids'],
+                    j.get('tags', []),
+                    actions,
+                    action_ids,
+                    j.get('tree_str', None),
+                    j.get('max_stack_size', -1),
+                    j.get('is_subword_end', None),
+                    j.get('idnum',''),
+                    speech_feats)
+    else:
+      sent = Sentence(j['orig_tokens'],
                     j['tokens'],
                     j['token_ids'],
                     j.get('tags', []),
@@ -185,6 +206,8 @@ class Sentence(object):
                     j.get('tree_str', None),
                     j.get('max_stack_size', -1),
                     j.get('is_subword_end', None))
+      
+    return sent
 
   def random_unked(self, vocab):
     def unkify_rand(w_id):
@@ -254,6 +277,7 @@ class Dataset(object):
   def from_json(data_file, batch_size, vocab=None, action_dict=None, random_unk=False,
                 oracle='top_down', batch_group='same_length', batch_token_size=15000,
                 batch_action_size = 50000, max_length_diff = 20, group_sentence_size = 1024):
+          
     """If vocab and action_dict are provided, they are not loaded from data_file.
     This is for sharing these across train/valid/test sents.
 
@@ -268,6 +292,7 @@ class Dataset(object):
         return InOrderActionDict(nonterminals)
 
     j = Dataset._load_json_helper(data_file)
+    jdata = j
     sents = [Sentence.from_json(s, oracle) for s in j['sentences']]
     vocab = vocab or Vocabulary.from_data_json(j)
     action_dict = action_dict or new_action_dict(j['nonterminals'])
@@ -436,8 +461,9 @@ class Dataset(object):
 
     for batch_idx in batches:
       token_ids = [conv_sent(i) for i in batch_idx]
+      speech_feats = [self.sents[i].speech_feats for i in batch_idx]
       tokens = torch.tensor(self._pad_token_ids(token_ids), dtype=torch.long)
-      ret = (tokens,)
+      ret = (tokens,speech_feats,)
       if not test:
         action_ids = [self.sents[i].action_ids for i in batch_idx]
         max_stack_size = max([self.sents[i].max_stack_size for i in batch_idx])

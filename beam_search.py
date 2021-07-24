@@ -118,7 +118,7 @@ def main(args):
     for parse in orig_order_parses:
       print(parse)
 
-  def dump_histroy(beam_history, sents):
+  def dump_history(beam_history, sents):
     for pointer, bucket_i, beam, word_completed in beam_history:
       print('pointer: {}, i: {}'.format(pointer, bucket_i))
       for batch_i in range(len(beam)):
@@ -144,7 +144,7 @@ def main(args):
     stack_size_bound = args.stack_size_bound if stack_size_bound is None else -1
     if args.dump_beam:
       parses, surprisals, beam_history = parse(tokens, subword_end_mask, True, stack_size_bound)
-      dump_histroy(beam_history, [dataset.sents[idx] for idx in batch_idx])
+      dump_history(beam_history, [dataset.sents[idx] for idx in batch_idx])
     else:
       parses, surprisals = parse(tokens, subword_end_mask, False, stack_size_bound)
       beam_history = None

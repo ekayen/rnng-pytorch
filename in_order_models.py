@@ -18,12 +18,14 @@ class InOrderRNNG(TopDownRNNG):
                max_open_nts = 100,
                max_cons_nts = 3,
                do_swap_in_rnn = True,
+               speech_feats = None
   ):
     super(InOrderRNNG, self).__init__(action_dict, vocab, padding_idx,
                                       w_dim, h_dim, num_layers,
                                       dropout, attention_composition,
-                                      max_open_nts, max_cons_nts)
+                                      max_open_nts, max_cons_nts,speech_feats)
     self.do_swap_in_rnn = do_swap_in_rnn
+    
 
   def initial_states(self, x, initial_stack = None):
     initial_hs = self._initial_hs(x, initial_stack)
