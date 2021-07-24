@@ -180,6 +180,7 @@ def get_sent_info(arg):
         in_order_actions, tokens, subword_tokenized)
     tags, tokens, tokens_lower = get_tags_tokens_lowercase(tree)
     orig_tokens = tokens[:]
+
     if sp is None:
         # these are not applied with sentencepiece
         if lowercase:
@@ -367,12 +368,16 @@ def get_data(args):
         print("Vocab size: {}".format(len(vocab.i2w)))
         sp = None
 
-    def load_sp_feats(directory,split):
-        partition = pickle.load(open(os.path.join(directory,f'{split}_partition.pickle'),'rb'))
-        pitch = pickle.load(open(os.path.join(directory,f'{split}_pitch.pickle'),'rb'))
-        fbank = pickle.load(open(os.path.join(directory,f'{split}_fbank.pickle'),'rb'))
-        pause = pickle.load(open(os.path.join(directory,f'{split}_pause.pickle'),'rb'))
-        duration = pickle.load(open(os.path.join(directory,f'{split}_duration.pickle'),'rb'))
+    def load_sp_feats(directory,split,turn=False):
+        if turn:
+            prefix = 'turn_'
+        else:
+            prefix = ''
+        partition = pickle.load(open(os.path.join(directory,f'{prefix}{split}_partition.pickle'),'rb'))
+        pitch = pickle.load(open(os.path.join(directory,f'{prefix}{split}_pitch.pickle'),'rb'))
+        fbank = pickle.load(open(os.path.join(directory,f'{prefix}{split}_fbank.pickle'),'rb'))
+        pause = pickle.load(open(os.path.join(directory,f'{prefix}{split}_pause.pickle'),'rb'))
+        duration = pickle.load(open(os.path.join(directory,f'{prefix}{split}_duration.pickle'),'rb'))
         out_dict = {}
         for idnum in pause: # iterate over all sents or turns
             out_dict[idnum] = {}
@@ -401,13 +406,18 @@ def get_data(args):
 
         
     if args.speech_dir:
-        train_sp_feats = load_sp_feats(args.speech_dir,'train') if args.speech_dir else {}
-        dev_sp_feats = load_sp_feats(args.speech_dir,'dev') if args.speech_dir else {}
-        test_sp_feats = load_sp_feats(args.speech_dir,'test') if args.speech_dir else {}
+        train_sp_feats = load_sp_feats(args.speech_dir,'train',args.turn) if args.speech_dir else {}
+        dev_sp_feats = load_sp_feats(args.speech_dir,'dev',args.turn) if args.speech_dir else {}
+        test_sp_feats = load_sp_feats(args.speech_dir,'test',args.turn) if args.speech_dir else {}
 
-        train_id_file = os.path.join(args.speech_dir,'train_sent_ids.txt')
-        dev_id_file = os.path.join(args.speech_dir,'dev_sent_ids.txt')
-        test_id_file = os.path.join(args.speech_dir,'test_sent_ids.txt')
+        if args.turn:
+            prefix = 'turn_'
+            infix = '_medium'
+        else:
+            prefix = infix = ''
+        train_id_file = os.path.join(args.speech_dir,f'{prefix}train_sent_ids{infix}.txt')
+        dev_id_file = os.path.join(args.speech_dir,f'{prefix}dev_sent_ids{infix}.txt')
+        test_id_file = os.path.join(args.speech_dir,f'{prefix}test_sent_ids{infix}.txt')
     else:
         train_sp_feats = {}
         dev_sp_feats = {}
@@ -416,6 +426,8 @@ def get_data(args):
         train_id_file = ''
         dev_id_file = ''
         test_id_file = ''
+
+    print(train_id_file)
 
     convert(args.testfile, args.lowercase, args.replace_num,
             0, args.minseqlength, args.outputfile + "-test.json",
@@ -470,6 +482,7 @@ def main(arguments):
     parser.add_argument('--jobs', type=int, default=-1)
     parser.add_argument('--id_file',type=str,default='')
     parser.add_argument('--speech_dir',type=str,default='')
+    parser.add_argument('--turn',action='store_true')
     args = parser.parse_args(arguments)
     if args.jobs == -1:
         args.jobs = len(os.sched_getaffinity(0))

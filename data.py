@@ -184,7 +184,7 @@ class Sentence(object):
       speech_feats['pitch'] = [np.array(feat) for feat in j.get('pitch')]
       speech_feats['fbank'] = [np.array(feat) for feat in j.get('fbank')]
       speech_feats['dur'] = [np.array(feat) for feat in j.get('dur')]
-      
+      jdummy= j
       sent = Sentence(j['orig_tokens'],
                     j['tokens'],
                     j['token_ids'],
@@ -206,7 +206,7 @@ class Sentence(object):
                     j.get('tree_str', None),
                     j.get('max_stack_size', -1),
                     j.get('is_subword_end', None))
-      
+
     return sent
 
   def random_unked(self, vocab):
@@ -276,7 +276,7 @@ class Dataset(object):
   @staticmethod
   def from_json(data_file, batch_size, vocab=None, action_dict=None, random_unk=False,
                 oracle='top_down', batch_group='same_length', batch_token_size=15000,
-                batch_action_size = 50000, max_length_diff = 20, group_sentence_size = 1024):
+                batch_action_size = 50000, max_length_diff = 20, group_sentence_size = 1024,test=False):
           
     """If vocab and action_dict are provided, they are not loaded from data_file.
     This is for sharing these across train/valid/test sents.
@@ -291,20 +291,21 @@ class Dataset(object):
       elif oracle == 'in_order':
         return InOrderActionDict(nonterminals)
 
-    j = Dataset._load_json_helper(data_file)
+    j = Dataset._load_json_helper(data_file,test)
     jdata = j
     sents = [Sentence.from_json(s, oracle) for s in j['sentences']]
+
     vocab = vocab or Vocabulary.from_data_json(j)
     action_dict = action_dict or new_action_dict(j['nonterminals'])
-
+    print(f'Num sents: {len(sents)}')
     return Dataset(sents, batch_size, vocab, action_dict, random_unk, j['args'],
                    batch_group=batch_group, batch_token_size=batch_token_size,
                    batch_action_size=batch_action_size, max_length_diff=max_length_diff,
                    group_sentence_size=group_sentence_size)
 
   @staticmethod
-  def _load_json_helper(path):
-    def read_jsonl(f):
+  def _load_json_helper(path,test=False):
+    def read_jsonl(f,test=False):
       data = {}
       sents = []
       for line in f:
@@ -312,14 +313,16 @@ class Dataset(object):
         k = o['key']
         if k == 'sentence':
           o['is_subword_end'] = get_subword_boundary_mask(o['tokens'])
-          # Unused values are discarded here (for reducing memory for larger data).
-          o['tokens'] = o['orig_tokens'] = o['tree_str'] = o['actions'] = o['in_order_actions'] = o['tags'] = None
+          if not test:
+            # Unused values are discarded here (for reducing memory for larger data).
+            o['tokens'] = o['orig_tokens'] = o['tree_str'] = o['actions'] = o['in_order_actions'] = o['tags'] = None
           sents.append(o)
         else:
           # key except 'sentence' should only appear once
           assert k not in data
           data[k] = o['value']
       data['sentences'] = sents
+
       return data
 
     try:
@@ -329,7 +332,7 @@ class Dataset(object):
     except json.decoder.JSONDecodeError:
       with open(path) as f:
         # New format => jsonl
-        return read_jsonl(f)
+        return read_jsonl(f,test)
 
   @staticmethod
   def from_text_file(text_file, batch_size, vocab, action_dict, tagger_fn = None,
@@ -379,7 +382,7 @@ class Dataset(object):
 
     This may be useful when outputing the parse results (approximately) streamly,
     by dumping to stdout (or file) at once for every 100~1000 sentences.
-    Below is an such example to dump parse results by keeping the original sentence
+    Below is an su5Bch example to dump parse results by keeping the original sentence
     order.
     ```
     batch_size = 3

@@ -23,6 +23,7 @@ from data import Dataset
 from utils import *
 from in_order_models import InOrderRNNG
 from fixed_stack_in_order_models import FixedStackInOrderRNNG
+from train import get_sp_feats
 
 logger = logging.getLogger(__name__)
 
@@ -84,7 +85,13 @@ def main(args):
     model.half()
 
   # todo: add tagger.
-  dataset = Dataset.from_text_file(args.test_file, args.batch_size, vocab, action_dict,
+  if args.test_file.endswith('json'):
+    dataset = Dataset.from_json(args.test_file, args.batch_size, vocab, action_dict,
+                                   batch_token_size = args.batch_token_size,
+                                   batch_group = 'similar_length',test=True
+  )
+  else:
+    dataset = Dataset.from_text_file(args.test_file, args.batch_size, vocab, action_dict,
                                    prepro_args = prepro_args,
                                    batch_token_size = args.batch_token_size,
                                    batch_group = 'similar_length'
@@ -129,24 +136,36 @@ def main(args):
         print()
 
   if args.particle_filter:
-    def parse(tokens, subword_end_mask, return_beam_history = False, stack_size_bound = -1):
+    def parse(tokens, subword_end_mask, return_beam_history = False, stack_size_bound = -1,speech_feats = None, device=None):
+      if speech_feats:
+        pause,dur,frames = get_sp_feats(args,speech_feats,device,model.speech_feat_types,model.tok_frame_len)
+      else:
+        pause = dur = frames = None
       return model.variable_beam_search(tokens, subword_end_mask, args.particle_size,
                                         args.original_reweight,
-                                        stack_size_bound=stack_size_bound)
+                                        stack_size_bound=stack_size_bound,
+                                        pause=pause,dur=dur,frames=frames)
   else:
-    def parse(tokens, subword_end_mask, return_beam_history=False, stack_size_bound = -1):
+    def parse(tokens, subword_end_mask, return_beam_history=False, stack_size_bound = -1,speech_feats = None,device=None):
+      if speech_feats:
+        pause,dur,frames = get_sp_feats(args,speech_feats,device,model.speech_feat_types,model.tok_frame_len)
+      else:
+        pause = dur = frames = None
+
       return model.word_sync_beam_search(
         tokens, subword_end_mask, args.beam_size, args.word_beam_size, args.shift_size,
         return_beam_history=return_beam_history,
-        stack_size_bound=stack_size_bound)
+        stack_size_bound=stack_size_bound,
+        pause=pause,dur=dur,frames=frames)
 
-  def try_parse(tokens, subword_end_mask, stack_size_bound = None):
+  def try_parse(tokens, subword_end_mask, stack_size_bound = None,speech_feats = None,device=None):
+
     stack_size_bound = args.stack_size_bound if stack_size_bound is None else -1
     if args.dump_beam:
-      parses, surprisals, beam_history = parse(tokens, subword_end_mask, True, stack_size_bound)
+      parses, surprisals, beam_history = parse(tokens, subword_end_mask, True, stack_size_bound,speech_feats,device)
       dump_history(beam_history, [dataset.sents[idx] for idx in batch_idx])
     else:
-      parses, surprisals = parse(tokens, subword_end_mask, False, stack_size_bound)
+      parses, surprisals = parse(tokens, subword_end_mask, False, stack_size_bound,speech_feats,device)
       beam_history = None
     return parses, surprisals, beam_history
 
@@ -159,12 +178,14 @@ def main(args):
     batches = [batch for batch in dataset.test_batches(
       args.block_size, max_length_diff=args.max_length_diff)]
 
-    for batch in tqdm(batches):
-      tokens, subword_end_mask, batch_idx = batch
+    for batch in tqdm(batches): 
+
+      #tokens, subword_end_mask, batch_idx = batch
+      tokens, speech_feats, subword_end_mask, batch_idx = batch
       tokens = tokens.to(device)
       subword_end_mask = subword_end_mask.to(device)
 
-      parses, surprisals, beam_history = try_parse( tokens, subword_end_mask)
+      parses, surprisals, beam_history = try_parse( tokens, subword_end_mask,speech_feats=speech_feats,device=device)
       if any(len(p) == 0 for p in parses):
         # parse failure (on some tree in a batch)
         failed_sents = [(idx, " ".join(dataset.sents[idx].orig_tokens)) for p, idx
@@ -183,15 +204,17 @@ def main(args):
                          "sentence length {}.".format(args.stack_size_bound, tokens.size(1)))
           logger.warning("Try to reparse with increased stack size bound...")
           parses, surprisals, beam_history = try_parse(tokens, subword_end_mask,
-                                                       stack_size_bound = -1)
+                                                       stack_size_bound = -1,
+                                                       speech_feats=speech_feats,
+                                                       device=device)
 
       best_actions = [p[0][0] for p in parses]  # p[0][1] is likelihood
       subword_end_mask = subword_end_mask.cpu().numpy()
-      trees = [action_dict.build_tree_str(best_actions[i],
+      for i in range(len(batch_idx)):
+        trees = [action_dict.build_tree_str(best_actions[i],
                                           dataset.sents[batch_idx[i]].orig_tokens,
                                           dataset.sents[batch_idx[i]].tags,
-                                          subword_end_mask[i])
-               for i in range(len(batch_idx))]
+                                          subword_end_mask[i]) for i in range(len(batch_idx))]
       block_idxs.extend(batch_idx)
       block_parses.extend(trees)
       block_surprisals.extend(surprisals)

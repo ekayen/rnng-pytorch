@@ -7,7 +7,7 @@ import numpy as np
 from utils import *
 from torch.distributions import Bernoulli
 import itertools
-
+from speech_utils import get_sp_feats
 
 class MultiLayerLSTMCell(nn.Module):
   def __init__(self, input_size, hidden_size, num_layers, bias=True, dropout=0):
@@ -765,7 +765,8 @@ class FixedStackRNNG(nn.Module):
                attention_composition=False,
                max_open_nts = 100,
                max_cons_nts = 8,
-               speech_feat_types = None
+               speech_feat_types = None,
+               tok_frame_len = None
   ):
     super(FixedStackRNNG, self).__init__()
     self.action_dict = action_dict
@@ -791,7 +792,10 @@ class FixedStackRNNG(nn.Module):
       self.filter_sizes = [5,10,25,50]
       self.num_conv = 32
       self.num_channel_in = 1
-      self.tok_frame_len = 100
+      if tok_frame_len:
+        self.tok_frame_len = tok_frame_len
+      else:
+        self.tok_frame_len = 100
       
       self.speech_emb_size = 0
       if 'pause' in self.speech_feat_types:
@@ -831,7 +835,7 @@ class FixedStackRNNG(nn.Module):
     self.action_mlp = nn.Linear(self.stack_emb_size, self.num_actions)
     self.input_size = self.stack_emb_size #w_dim
     self.hidden_size = h_dim
-    self.vocab_mlp.weight = self.emb[0].weight
+    #self.vocab_mlp.weight = self.emb[0].weight
 
     self.max_open_nts = max_open_nts
     self.max_cons_nts = max_cons_nts
@@ -909,7 +913,7 @@ class FixedStackRNNG(nn.Module):
 
   def word_sync_beam_search(self, x, subword_end_mask, beam_size, word_beam_size = 0,
                             shift_size = 0, stack_size_bound = 100,
-                            return_beam_history = False):
+                            return_beam_history = False, speech_feats = None):
     self.eval()
     sent_lengths = (x != self.padding_idx).sum(dim=1)
     if (hasattr(self.rnng.composition, 'batch_index') and
@@ -1073,7 +1077,7 @@ class FixedStackRNNG(nn.Module):
     stack_state = StackState(initial_hidden[0].size(0), beam_size, initial_hidden[0].device)
     return stack, stack_state
 
-  def variable_beam_search(self, x, subword_end_mask, K, original_reweight=False, stack_size_bound=100):
+  def variable_beam_search(self, x, subword_end_mask, K, original_reweight=False, stack_size_bound=100,pause=None, dur=None, frames=None):
     self.eval()
     sent_lengths = (x != self.padding_idx).sum(dim=1)
     #max_beam_size = min(K//2, 1000)
@@ -1087,7 +1091,11 @@ class FixedStackRNNG(nn.Module):
 
     beam, word_completed_beam = self.build_beam_items(x, max_beam_size, 0, True, K,
                                                       stack_size_bound=stack_size_bound)
+      
     word_vecs = self.emb(x)
+    if self.speech_feat_types:
+      speech_vecs = self.speech_encoder(pause,dur,frames)
+      word_vecs = torch.cat((word_vecs, speech_vecs),dim=2)
     word_marginal_ll = [[] for _ in range(x.size(0))]
 
     parses = [None] * x.size(0)

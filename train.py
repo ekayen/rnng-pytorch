@@ -28,6 +28,7 @@ from in_order_models import InOrderRNNG
 from fixed_stack_models import FixedStackRNNG
 from fixed_stack_in_order_models import FixedStackInOrderRNNG
 from utils import *
+from speech_utils import get_sp_feats
 
 logger = logging.getLogger(__name__)
 
@@ -95,6 +96,11 @@ parser.add_argument('--amp', action='store_true')
 parser.add_argument('--early_stop', action='store_true', help='Stop learning if loss monotonically increases --early_stop_patience times (default=5)')
 parser.add_argument('--early_stop_patience', type=int, default=5)
 parser.add_argument('--tok_frame_len',default=100,type=int, help='num frames to pad or cut each token to')
+
+
+
+
+
 
 class TensorBoardLogger(object):
   def __init__(self, args):
@@ -272,13 +278,14 @@ def main(args):
       logger.info('Epoch: {}, Batch: {}/{}, LR: {:.4f}, '
                   'ActionPPL: {:.2f}, WordPPL: {:.2f}, '
                   'PPL: {:2f}, LL: {}, '
-                  '|Param|: {:.2f}, E[batch size]: {}, Throughput: {:.2f} examples/sec'.format(
+                  '|Param|: {:.2f}, E[batch size]: {}, Throughput: {:.2f} examples/sec, Epoch time (sec): {}'.format(
                     epoch, b, len(train_data), optimizer.param_groups[0]['lr'],
                     action_ppl, word_ppl,
                     ppl, -ll_diff,
                     param_norm,
                     sum(batch_sizes) / len(batch_sizes),
-                    num_sents / (time.time() - start_time)
+                    num_sents / (time.time() - start_time),
+                    round((time.time() - start_time),2)
                   ))
       return ppl, word_ppl, action_ppl
 
@@ -300,74 +307,10 @@ def main(args):
         loss = loss / w_loss.size(0)
       return loss, a_loss, w_loss
 
-    def pad_tok_frames(tok_frames,padded_len = 100):
-      if padded_len >= tok_frames.shape[-1]:
-        padded = np.pad(tok_frames,((0,0),(0,padded_len-tok_frames.shape[-1])))
-      else:
-        subsampled = tok_frames
-        while subsampled.shape[-1] > padded_len:
-          subsampled = subsampled[:,::2]
-        padded = np.pad(subsampled,((0,0),(0,padded_len-subsampled.shape[-1])))
-      return padded
-
-    def pad_batch_frames(feats):
-      batched = []
-      num_channel_in = 1
-      max_toks = max([len(sent_feats) for sent_feats in feats])
-      zero_tok = np.zeros(feats[0][0].shape)
-      for i,sent in enumerate(feats):
-        while len(feats[i]) < max_toks:
-          feats[i].append(zero_tok)
-      batched = []
-      for i in range(max_toks):
-        all_tok = np.stack([sent[i] for sent in feats],axis=0)
-        bat_shape = all_tok.shape
-        all_tok = torch.tensor(all_tok,requires_grad=True).type(torch.float).view(bat_shape[0],num_channel_in,bat_shape[1],bat_shape[2]).to(device)
-        batched.append(all_tok)
-      return batched
-
-    
-    def bat_frame_feats(speech_feats,pitch=True,fbank=True,tok_frame_len=100):
-      if pitch:
-        pitch_feats = [feats['pitch'] for feats in speech_feats]
-        pitch_batched = [[pad_tok_frames(tok,tok_frame_len) for tok in feats] for feats in pitch_feats]
-        pitch_batched = pad_batch_frames(pitch_batched)
-      if fbank:
-        fbank_feats = [feats['fbank'] for feats in speech_feats]
-        fbank_batched  = [[pad_tok_frames(tok,tok_frame_len) for tok in feats] for feats in fbank_feats]
-        fbank_batched = pad_batch_frames(fbank_batched)
-
-      if fbank and pitch:
-        frame_batched = [torch.cat([pit,fb],dim=2) for pit,fb in zip(pitch_batched,fbank_batched)]
-      elif fbank:
-        frame_batched = fbank_batched
-      elif pitch:
-        frame_batched = pitch_batched
-
-      return frame_batched
-
-    
-    def bat_pause_feats(speech_feats):
-      max_num_toks = 0
-      pause_batched = []
-      for feats in speech_feats:
-        max_num_toks = max(max_num_toks,len(feats['pause']))
-        pause_batched.append(np.array(feats['pause']))
-      pause_batched = torch.tensor(np.stack([np.pad(sent,((0,max_num_toks-sent.shape[0])),constant_values=0) for sent in pause_batched])).type(torch.int)
-      return pause_batched
-
-    def bat_dur_feats(speech_feats):
-      max_num_toks = 0
-      dur_batched = []
-      for feats in speech_feats:
-        max_num_toks = max(max_num_toks,len(feats['dur']))
-        dur_batched.append(np.stack(feats['dur']))
-      dur_batched = [np.pad(sent,((0,max_num_toks-sent.shape[0]),(0,0)),constant_values=0) for sent in dur_batched]
-      dur_batched = torch.tensor(np.stack(dur_batched))
-      return dur_batched
-
-        
-    def batch_step(token_ids, action_ids, max_stack_size, subword_end_mask, num_divides, speech_feats=None,speech_feat_types=[],tok_frame_len=100):
+      
+    def batch_step(token_ids, action_ids, max_stack_size, subword_end_mask, num_divides, speech_feats=None,args=None):
+      speech_feat_types = args.speech_feat_types
+      tok_frame_len = args.tok_frame_len
       optimizer.zero_grad()
       block_size = token_ids.size(0) // num_divides
       total_a_loss = 0
@@ -380,47 +323,31 @@ def main(args):
         div_subword_end_mask = subword_end_mask[begin_idx:begin_idx+block_size]
         if speech_feat_types:
           div_speech_feats = speech_feats[begin_idx:begin_idx+block_size]
-          if 'pause' in speech_feat_types:
-            pause = bat_pause_feats(speech_feats).to(device)
-          else:
-            pause = None
-          if 'dur' in speech_feat_types:
-            dur = bat_dur_feats(speech_feats).to(device)
-          else:
-            dur = None
-          if 'pitch' and 'fbank' in speech_feat_types:
-            frames = bat_frame_feats(speech_feats,pitch=True,fbank=True,tok_frame_len=tok_frame_len)
-          elif 'pitch' in speech_feat_types:
-            frames = bat_frame_feats(speech_feats,pitch=True,fbank=False,tok_frame_len=tok_frame_len)
-          elif 'fbank' in speech_feat_types:
-            frames = bat_frame_feats(speech_feats,pitch=False,fbank=True,tok_frame_len=tok_frame_len)
-          else:
-            frames = None
-          #frames = torch.rand(div_token_ids.shape[0],div_token_ids.shape[1],134,dtype=torch.float,device=device,requires_grad=True) # FOR DEBUGGING
+          pause,dur,frames = get_sp_feats(args,div_speech_feats,device)
         else:
           div_speech_feats = None
           pause = None
           dur = None
           frames = None
-        with torch.autograd.detect_anomaly():
-          loss, a_loss, w_loss = calc_loss(div_token_ids, div_action_ids,
+
+        loss, a_loss, w_loss = calc_loss(div_token_ids, div_action_ids,
                                          max_stack_size, div_subword_end_mask, pause, dur, frames)
 
-          if num_divides > 1:
-            loss  = loss / num_divides
-          if args.amp:
-            scaler.scale(loss).backward()
-          else:
-            loss.backward()
-          total_a_loss += -a_loss.sum().detach().item()
-          total_w_loss += -w_loss.sum().detach().item()
-          num_as += a_loss.size(0)
-          num_ws += w_loss.size(0)
+        if num_divides > 1:
+          loss  = loss / num_divides
+        if args.amp:
+          scaler.scale(loss).backward()
+        else:
+          loss.backward()
+        total_a_loss += -a_loss.sum().detach().item()
+        total_w_loss += -w_loss.sum().detach().item()
+        num_as += a_loss.size(0)
+        num_ws += w_loss.size(0)
       return total_a_loss, total_w_loss, num_as, num_ws
 
     def try_batch_step(token_ids, action_ids, max_stack_size, subword_end_mask,
-                       num_divides = 1,speech_feats = None,speech_feat_types=[],tok_frame_len=100):
-      return batch_step(token_ids, action_ids, max_stack_size, subword_end_mask, num_divides, speech_feats,speech_feat_types,tok_frame_len=tok_frame_len)
+                       num_divides = 1,speech_feats = None,args = None):
+      return batch_step(token_ids, action_ids, max_stack_size, subword_end_mask, num_divides, speech_feats,args = args)
       """ TODO uncomment this -- it's making debugging hard, but it is useful once the model works
       try:
         return batch_step(token_ids, action_ids, max_stack_size, subword_end_mask, num_divides, speech_feats)
@@ -451,7 +378,7 @@ def main(args):
       global_batch_i += 1
       # optimizer.zero_grad()
 
-      batch_ll = try_batch_step(token_ids, action_ids, max_stack_size, subword_end_mask, speech_feats=speech_feats,speech_feat_types=args.speech_feat_types,tok_frame_len=args.tok_frame_len) 
+      batch_ll = try_batch_step(token_ids, action_ids, max_stack_size, subword_end_mask, speech_feats=speech_feats,args = args)
       total_a_ll += batch_ll[0]
       total_w_ll += batch_ll[1]
 
@@ -499,7 +426,7 @@ def do_valid(model, optimizer, scheduler, train_data, val_data, tb, epoch, step,
   best_val_loss = float('inf') if len(val_losses) == 0 else min(val_losses)
   logger.info('--------------------------------')
   logger.info('Checking validation perplexity...')
-  val_loss, val_ppl, val_action_ppl, val_word_ppl = eval_action_ppl(val_data, model)
+  val_loss, val_ppl, val_action_ppl, val_word_ppl = eval_action_ppl(val_data, model, args)
   tb.write({'Valid ppl': val_ppl, 'Valid action ppl': val_action_ppl, 'Valid word ppl': val_word_ppl}, step)
   tb.write({'Valid loss': val_loss}, use_time=True)
   logger.info('--------------------------------')
@@ -529,7 +456,8 @@ def do_valid(model, optimizer, scheduler, train_data, val_data, tb, epoch, step,
   if epoch >= args.min_epochs and isinstance(scheduler, ReduceLROnPlateau):
     scheduler.step(val_loss)
 
-def eval_action_ppl(data, model):
+def eval_action_ppl(data, model, args):
+  speech_feat_types = args.speech_feat_types
   device = next(model.parameters()).device
   model.eval()
   num_sents = 0
@@ -543,9 +471,13 @@ def eval_action_ppl(data, model):
       token_ids = token_ids.to(device)
       action_ids = action_ids.to(device)
       subword_end_mask = subword_end_mask.to(device)
+      pause,dur,frames = get_sp_feats(args,speech_feats,device)
       loss, a_loss, w_loss, _ = model(token_ids, action_ids,
                                       stack_size_bound=max_stack_size,
-                                      subword_end_mask=subword_end_mask)
+                                      subword_end_mask=subword_end_mask,
+                                      pause=pause,
+                                      dur=dur,
+                                      frames=frames)
       total_a_ll += -a_loss.sum().detach().item()
       total_w_ll += -w_loss.sum().detach().item()
 
