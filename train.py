@@ -96,8 +96,10 @@ parser.add_argument('--amp', action='store_true')
 parser.add_argument('--early_stop', action='store_true', help='Stop learning if loss monotonically increases --early_stop_patience times (default=5)')
 parser.add_argument('--early_stop_patience', type=int, default=5)
 parser.add_argument('--tok_frame_len',default=100,type=int, help='num frames to pad or cut each token to')
-
-
+parser.add_argument('--token_lookahead',action='store_true',help='include one TEXT token of lookahead')
+parser.add_argument('--back_context',type=int,default=0,help='num tokens of backward PROSODIC context to include')
+parser.add_argument('--for_context',type=int,default=0,help='num tokens of forward PROSODIC context to include')
+parser.add_argument('--context_strat',type=str,default='all',help='Strategy for processing extra context: all = keep all frames, pool = mean pool frames, leading = keep leading n frames')
 
 
 
@@ -161,8 +163,14 @@ def create_model(args, action_dict, vocab):
                 'num_layers': args.num_layers,
                 'dropout': args.dropout,
                 'attention_composition': args.composition == 'attention',
-                'speech_feat_types':args.speech_feat_types}
+                'speech_feat_types':args.speech_feat_types,
+                'tok_frame_len':args.tok_frame_len,
+                'token_lookahead':args.token_lookahead,
+                'back_context':args.back_context,
+                'for_context':args.for_context,
+                'context_strat':args.context_strat}
 
+  print(f'model args: {model_args}')
   if args.strategy == 'top_down':
     if args.fixed_stack:
       model = FixedStackRNNG(**model_args)
@@ -170,6 +178,7 @@ def create_model(args, action_dict, vocab):
       model = TopDownRNNG(**model_args)
   elif args.strategy == 'in_order':
     if args.fixed_stack:
+      print('making fixed stack in order model')
       model = FixedStackInOrderRNNG(**model_args)
     else:
       model_args['do_swap_in_rnn'] = not args.not_swap_in_order_stack
@@ -348,9 +357,9 @@ def main(args):
     def try_batch_step(token_ids, action_ids, max_stack_size, subword_end_mask,
                        num_divides = 1,speech_feats = None,args = None):
       return batch_step(token_ids, action_ids, max_stack_size, subword_end_mask, num_divides, speech_feats,args = args)
-      """ TODO uncomment this -- it's making debugging hard, but it is useful once the model works
+      #""" TODO uncomment this -- it's making debugging hard, but it is useful once the model works
       try:
-        return batch_step(token_ids, action_ids, max_stack_size, subword_end_mask, num_divides, speech_feats)
+        return batch_step(token_ids, action_ids, max_stack_size, subword_end_mask, num_divides, speech_feats,args=args)
       except RuntimeError as e:  # memory error -> retry by reducing batch size
         # Error is processed outside this scope.
         # A hack to prevent memory leak when handling oov.
@@ -364,8 +373,8 @@ def main(args):
       ))
       logger.warning('Retry by halfing batch sizes...')
       return try_batch_step(token_ids, action_ids, max_stack_size, subword_end_mask,
-                            num_divides * 2,speech_feats)
-      """
+                            num_divides * 2,speech_feats,args=args)
+      #"""
 
     
     for batch in train_data.batches():

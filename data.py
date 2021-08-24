@@ -292,12 +292,10 @@ class Dataset(object):
         return InOrderActionDict(nonterminals)
 
     j = Dataset._load_json_helper(data_file,test)
-    jdata = j
     sents = [Sentence.from_json(s, oracle) for s in j['sentences']]
 
     vocab = vocab or Vocabulary.from_data_json(j)
     action_dict = action_dict or new_action_dict(j['nonterminals'])
-    print(f'Num sents: {len(sents)}')
     return Dataset(sents, batch_size, vocab, action_dict, random_unk, j['args'],
                    batch_group=batch_group, batch_token_size=batch_token_size,
                    batch_action_size=batch_action_size, max_length_diff=max_length_diff,

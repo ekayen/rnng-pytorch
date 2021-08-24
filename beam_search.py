@@ -25,6 +25,12 @@ from in_order_models import InOrderRNNG
 from fixed_stack_in_order_models import FixedStackInOrderRNNG
 from train import get_sp_feats
 
+torch.cuda.empty_cache()
+import gc
+
+gc.collect()
+    
+
 logger = logging.getLogger(__name__)
 
 parser = argparse.ArgumentParser()
@@ -68,10 +74,14 @@ def load_model(checkpoint, action_dict, vocab):
     return checkpoint['model']
 
 def main(args):
+  """
   if args.device == 'cuda':
     device = 'cuda:{}'.format(args.gpu)
   else:
     device = 'cpu'
+  """
+  use_cuda = torch.cuda.is_available()
+  device = torch.device("cuda" if use_cuda else "cpu")
 
   np.random.seed(args.seed)
   torch.manual_seed(args.seed)
@@ -137,7 +147,7 @@ def main(args):
 
   if args.particle_filter:
     def parse(tokens, subword_end_mask, return_beam_history = False, stack_size_bound = -1,speech_feats = None, device=None):
-      if speech_feats:
+      if model.speech_feat_types:
         pause,dur,frames = get_sp_feats(args,speech_feats,device,model.speech_feat_types,model.tok_frame_len)
       else:
         pause = dur = frames = None
@@ -147,7 +157,7 @@ def main(args):
                                         pause=pause,dur=dur,frames=frames)
   else:
     def parse(tokens, subword_end_mask, return_beam_history=False, stack_size_bound = -1,speech_feats = None,device=None):
-      if speech_feats:
+      if model.speech_feat_types:
         pause,dur,frames = get_sp_feats(args,speech_feats,device,model.speech_feat_types,model.tok_frame_len)
       else:
         pause = dur = frames = None

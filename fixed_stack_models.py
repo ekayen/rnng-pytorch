@@ -709,7 +709,8 @@ class SpeechEncoder(nn.Module):
     self.speech_emb_size = speech_emb_size
     
     self.pause_emb = nn.Sequential(nn.Embedding(self.pause_vocab_size,self.pause_emb_size),self.dropout)
-    
+
+    #print(f'tok_frame_len: {self.tok_frame_len}')
     conv_modules = []
     for filter_size in self.filter_sizes:
 
@@ -737,9 +738,13 @@ class SpeechEncoder(nn.Module):
     if 'pitch' in self.speech_feat_types or 'fbank' in self.speech_feat_types:
       conv_tokens = []
       for token in frames:
+        #print(token.shape)
         conv_frames = [convolve(token) for convolve in self.conv_modules]
+        #print(conv_frames[0].shape)
         conv_frames = [x.squeeze(-1).squeeze(-1) for x in conv_frames]
+        #print(conv_frames[0].shape)        
         conv_frames = torch.cat(conv_frames, -1)
+        #print(conv_frames.shape) 
         conv_frames = conv_frames.view(conv_frames.shape[0],1,conv_frames.shape[1]) # add a dim for num tokens (1 inside for loop)
         conv_tokens.append(conv_frames)
       conv_tokens = torch.cat(conv_tokens,dim=1)
@@ -766,7 +771,12 @@ class FixedStackRNNG(nn.Module):
                max_open_nts = 100,
                max_cons_nts = 8,
                speech_feat_types = None,
-               tok_frame_len = None
+               tok_frame_len = None,
+               token_lookahead = False,
+               back_context = 0,
+               for_context = 0,
+               context_strat = 'all'
+               
   ):
     super(FixedStackRNNG, self).__init__()
     self.action_dict = action_dict
@@ -778,13 +788,22 @@ class FixedStackRNNG(nn.Module):
 
     self.dropout = nn.Dropout(dropout, inplace=True)
     self.w_dim = w_dim
-    self.stack_emb_size = w_dim
+
+    # Adding this to do token lookahead (may remove later) #####
+    self.token_lookahead = token_lookahead
+    if self.token_lookahead:
+      print('TOKEN LOOKAHEAD')
+      self.w_dim_doubled = self.w_dim*2
+      self.stack_emb_size =self.w_dim_doubled
+    else:
+    ############################
+      self.stack_emb_size = w_dim
     
     self.emb = nn.Sequential(nn.Embedding(vocab, w_dim, padding_idx=padding_idx), self.dropout)
 
     
     self.speech_feat_types = speech_feat_types
-
+    
     if self.speech_feat_types:
       self.pause_embedding_size = 4 # TODO make configurable
       self.pause_vocab_size = 8
@@ -840,6 +859,11 @@ class FixedStackRNNG(nn.Module):
     self.max_open_nts = max_open_nts
     self.max_cons_nts = max_cons_nts
 
+    # Extra prosodic context handling
+    self.back_context = back_context
+    self.for_context = for_context
+    self.context_strat = context_strat
+    
 
   def forward(self, x, actions, initial_stack = None, stack_size_bound = -1,
               subword_end_mask = None, pause=None, dur=None, frames=None):
@@ -855,7 +879,21 @@ class FixedStackRNNG(nn.Module):
 
       speech_vecs = self.speech_encoder(pause,dur,frames)
       word_vecs = self.emb(x)
-      input_vecs = torch.cat((word_vecs,speech_vecs),2)
+
+      if self.token_lookahead:
+        
+        
+        shifted = word_vecs[:,1:,:] # drop first tok
+        zero_word = torch.zeros(word_vecs.shape[0],1,word_vecs.shape[-1]).to(word_vecs.device)
+        shifted = torch.cat((zero_word,shifted),dim=1) # append word vec of all zeros to front
+        word_vecs = torch.cat((word_vecs,shifted),dim=-1) # concatenate word vecs with shifted word vecs, doubling embedding dim
+
+      try:
+        
+        input_vecs = torch.cat((word_vecs,speech_vecs),2)
+      except:
+        print('dims error, probably')
+        import pdb;pdb.set_trace()
     else:
       input_vecs = self.emb(x)
 
@@ -913,7 +951,7 @@ class FixedStackRNNG(nn.Module):
 
   def word_sync_beam_search(self, x, subword_end_mask, beam_size, word_beam_size = 0,
                             shift_size = 0, stack_size_bound = 100,
-                            return_beam_history = False, speech_feats = None):
+                            return_beam_history = False, pause=None, dur=None, frames=None):
     self.eval()
     sent_lengths = (x != self.padding_idx).sum(dim=1)
     if (hasattr(self.rnng.composition, 'batch_index') and
@@ -927,7 +965,22 @@ class FixedStackRNNG(nn.Module):
 
     beam, word_completed_beam = self.build_beam_items(x, beam_size, shift_size,
                                                       stack_size_bound=stack_size_bound)
-    word_vecs = self.emb(x)
+    if self.speech_feat_types:
+
+      speech_vecs = self.speech_encoder(pause,dur,frames)
+      word_vecs = self.emb(x)
+      if self.token_lookahead:
+        
+        
+        shifted = word_vecs[:,1:,:] # drop first tok
+        zero_word = torch.zeros(word_vecs.shape[0],1,word_vecs.shape[-1]).to(word_vecs.device)
+        shifted = torch.cat((zero_word,shifted),dim=1) # append word vec of all zeros to front
+        word_vecs = torch.cat((word_vecs,shifted),dim=-1) # concatenate word vecs with shifted word vecs, doubling embedding dim
+
+      word_vecs = torch.cat((word_vecs,speech_vecs),2)
+    else:
+      word_vecs = self.emb(x)
+      
     word_marginal_ll = [[] for _ in range(x.size(0))]
 
     parses = [None] * x.size(0)

@@ -71,27 +71,30 @@ def bat_dur_feats(speech_feats):
   dur_batched = torch.tensor(np.stack(dur_batched))
   return dur_batched
 
-def get_sp_feats(args,speech_feats,device,speech_feat_types=None,tok_frame_len=None):
+def get_sp_feats(args,speech_feats,device,speech_feat_types=[],tok_frame_len=None):
   if not speech_feat_types:
     speech_feat_types = args.speech_feat_types
   if not tok_frame_len:
     tok_frame_len = args.tok_frame_len
 
-  if 'pause' in speech_feat_types:
-    pause = bat_pause_feats(speech_feats).to(device)
+  if speech_feat_types:
+    if 'pause' in speech_feat_types:
+      pause = bat_pause_feats(speech_feats).to(device)
+    else:
+      pause = None
+    if 'dur' in speech_feat_types:
+      dur = bat_dur_feats(speech_feats).to(device)
+    else:
+      dur = None
+    if 'pitch' and 'fbank' in speech_feat_types:
+      frames = bat_frame_feats(speech_feats,pitch=True,fbank=True,tok_frame_len=tok_frame_len,device=device)
+    elif 'pitch' in speech_feat_types:
+      frames = bat_frame_feats(speech_feats,pitch=True,fbank=False,tok_frame_len=tok_frame_len,device=device)
+    elif 'fbank' in speech_feat_types:
+      frames = bat_frame_feats(speech_feats,pitch=False,fbank=True,tok_frame_len=tok_frame_len,device=device)
+    else:
+      frames = None
   else:
-    pause = None
-  if 'dur' in speech_feat_types:
-    dur = bat_dur_feats(speech_feats).to(device)
-  else:
-    dur = None
-  if 'pitch' and 'fbank' in speech_feat_types:
-    frames = bat_frame_feats(speech_feats,pitch=True,fbank=True,tok_frame_len=tok_frame_len,device=device)
-  elif 'pitch' in speech_feat_types:
-    frames = bat_frame_feats(speech_feats,pitch=True,fbank=False,tok_frame_len=tok_frame_len,device=device)
-  elif 'fbank' in speech_feat_types:
-    frames = bat_frame_feats(speech_feats,pitch=False,fbank=True,tok_frame_len=tok_frame_len,device=device)
-  else:
-    frames = None
+      pause = dur = frames = None
   return pause,dur,frames  
 

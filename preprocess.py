@@ -19,6 +19,8 @@ from pathlib import Path
 from tempfile import NamedTemporaryFile
 from multiprocessing import Pool
 import itertools
+import torch
+from skimage.measure import block_reduce
 
 from data import Sentence, Vocabulary
 from action_dict import TopDownActionDict, InOrderActionDict
@@ -313,6 +315,8 @@ def get_data(args):
             block_size = 100000
             tree_with_settings = []
             for idx,tree in enumerate(in_f):
+                if tree.startswith('(TOP'):
+                    tree = tree.replace('(TOP','').strip()[:-1]
                 if id_file:
                     idnum = ids[idx].strip()
                     tree_with_settings.append((tree, conv_setting,idnum))
@@ -322,7 +326,6 @@ def get_data(args):
                     dropped += process_block(tree_with_settings, f)
                     num_sents += len(tree_with_settings)
                     tree_with_settings = []
-                    print(num_sents)
             if len(tree_with_settings) > 0:
                 process_block(tree_with_settings, f)
                 num_sents += len(tree_with_settings)
@@ -368,7 +371,7 @@ def get_data(args):
         print("Vocab size: {}".format(len(vocab.i2w)))
         sp = None
 
-    def load_sp_feats(directory,split,turn=False):
+    def load_sp_feats(directory,split,turn=False,back_context=0,for_context=0,tok_frame_len=100,context_strat="all"):
         if turn:
             prefix = 'turn_'
         else:
@@ -391,13 +394,99 @@ def get_data(args):
             fb_tok = []
             pau_tok = []
             dur_tok = []
+            init_idx = 0
+            final_idx = len(part)-1
             for idx,prt in enumerate(part):
-                start,end = prt
                 pau_tok.append(pau['pause_aft'][idx])
                 dur_tok.append(dur[:,idx])
-                pit_tok.append(pit[:,start:end]) # TODO here is where I'll add different sizes of context window
-                fb_tok.append(fb[:,start:end]) # here too
-                    
+                start_idx = max(idx-back_context,init_idx)
+                end_idx = min(idx+for_context,final_idx)
+                start = part[start_idx][0]
+                end = part[end_idx][-1]
+                tmp_pit = pit[:,start:end]
+                tmp_fb = fb[:,start:end]
+                while tmp_pit.shape[-1] > args.tok_frame_len:
+                    tmp_pit = tmp_pit[:,::2]
+                    tmp_fb = tmp_pit[:,::2]
+                if context_strat == 'all': # include all frames for prev/following tokens
+                    pit_tok.append(tmp_pit)
+                    fb_tok.append(tmp_fb)
+                elif context_strat == 'pool': # Use mean pooling on prev/following tokens
+                    # Get any trailing tokens, mean pool them, and then append:
+                    bk_pit = []
+                    bk_fb = []
+                    fr_pit = []
+                    fr_fb = []
+                    if back_context > 0:
+                        for i in range(back_context):
+                            prev_idx = idx-i-1
+                            if prev_idx >= 0:
+                                prev_start = part[prev_idx][0]
+                                prev_end = part[prev_idx][-1]
+
+                                prev_pit = pit[:,prev_start:prev_end]
+
+                                if not prev_start==prev_end:
+                                    prev_pit = block_reduce(prev_pit,block_size=(1,prev_pit.shape[-1]),func=np.mean)
+                                    bk_pit = [prev_pit] + bk_pit
+                                
+                                    prev_fb = fb[:,prev_start:prev_end]
+                                    prev_fb = block_reduce(prev_fb,block_size=(1,prev_fb.shape[-1]),func=np.mean)
+                                    bk_fb = [prev_fb] + bk_fb
+                                
+                    if for_context > 0:
+                        for i in range(for_context):
+                            next_idx = idx+i+1
+                            if next_idx < len(part):
+                                next_start = part[next_idx][0]
+                                next_end = part[next_idx][-1]
+
+                                next_pit = pit[:,next_start:next_end]
+
+                                next_pit = block_reduce(next_pit,block_size=(1,next_pit.shape[-1]),func=np.mean)
+                                fr_pit.append(next_pit)
+
+                                next_fb = fb[:,next_start:next_end]
+                                next_fb = block_reduce(next_fb,block_size(1,next_fb.shape[-1]), func=np.mean)
+                                fr_fb.append(next_pit)
+                    tmp_pit = np.concatenate(bk_pit+[tmp_pit]+fr_pit,axis=1)
+                    tmp_fb = np.concatenate(bk_fb+[tmp_fb]+fr_fb,axis=1)
+                    pit_tok.append(tmp_pit)
+                    fb_tok.append(tmp_fb)
+                elif context_strat == 'leading': #use the first few leading frames for following (prev?) tokens
+                    N = 5 # How many leading frames to take
+                    assert back_context == 0 #FOR NOW, only use this setting to test out the 'one following token' condition
+                    assert for_context == 1
+                    next_idx = idx+1
+                    if next_idx < len(part):
+                        next_start = part[next_idx][0]
+                        next_end = min(part[next_idx][-1],next_start+N) # only take first N frames
+                        leading_pit = pit[:,next_start:next_end]
+                        leading_fb = fb[:,next_start:next_end]
+                        tmp_pit = np.concatenate([tmp_pit,leading_pit],axis=1)
+                        tmp_fb = np.concatenate([tmp_fb,leading_fb],axis=1)
+                    pit_tok.append(tmp_pit)
+                    fb_tok.append(tmp_fb)
+                elif context_strat == 'noise': # non-current token frames are replaced with noise of same shape.
+                    assert back_context == 0
+                    assert for_context == 1 # FOR NOW, only implement for the one following token condition.
+                    next_idx = idx + 1
+
+                    if next_idx < len(part):
+                        next_start = part[next_idx][0]
+                        next_end = part[next_idx][-1]
+                        next_pit = pit[:,next_start:next_end]
+                        next_fb = fb[:,next_start:next_end]
+                        noise_pit = np.random.normal(size=next_pit.shape)
+                        noise_fb = np.random.normal(size=next_fb.shape)
+                        tmp_pit = np.concatenate([tmp_pit,noise_pit],axis=1)
+                        tmp_fb = np.concatenate([tmp_fb,noise_fb],axis=1)
+
+                    pit_tok.append(tmp_pit)
+                    fb_tok.append(tmp_fb)
+            
+            #if pit[:,start:end].shape[-1] >100:
+            #    import pdb;pdb.set_trace()        
             out_dict[idnum]['pause'] = pau_tok
             out_dict[idnum]['pitch'] = pit_tok
             out_dict[idnum]['fbank'] = fb_tok
@@ -406,9 +495,9 @@ def get_data(args):
 
         
     if args.speech_dir:
-        train_sp_feats = load_sp_feats(args.speech_dir,'train',args.turn) if args.speech_dir else {}
-        dev_sp_feats = load_sp_feats(args.speech_dir,'dev',args.turn) if args.speech_dir else {}
-        test_sp_feats = load_sp_feats(args.speech_dir,'test',args.turn) if args.speech_dir else {}
+        train_sp_feats = load_sp_feats(args.speech_dir,'train',args.turn,args.back_context,args.for_context,args.tok_frame_len,args.context_strat) if args.speech_dir else {}
+        dev_sp_feats = load_sp_feats(args.speech_dir,'dev',args.turn,args.back_context,args.for_context,args.tok_frame_len,args.context_strat) if args.speech_dir else {}
+        test_sp_feats = load_sp_feats(args.speech_dir,'test',args.turn,args.back_context,args.for_context,args.tok_frame_len,args.context_strat) if args.speech_dir else {}
 
         if args.turn:
             prefix = 'turn_'
@@ -428,13 +517,14 @@ def get_data(args):
         test_id_file = ''
 
     print(train_id_file)
-
+    """
     convert(args.testfile, args.lowercase, args.replace_num,
             0, args.minseqlength, args.outputfile + "-test.json",
             vocab, sp, action_dict, io_action_dict, 0, args.jobs,test_sp_feats,test_id_file)
     convert(args.valfile, args.lowercase, args.replace_num,
             args.seqlength, args.minseqlength, args.outputfile + "-dev.json",
             vocab, sp, action_dict, io_action_dict, 0, args.jobs,dev_sp_feats,dev_id_file)
+    """
     convert(args.trainfile, args.lowercase, args.replace_num,
             args.seqlength,  args.minseqlength, args.outputfile + "-train.json",
             vocab, sp, action_dict, io_action_dict, 1, args.jobs,train_sp_feats,train_id_file)
@@ -483,6 +573,10 @@ def main(arguments):
     parser.add_argument('--id_file',type=str,default='')
     parser.add_argument('--speech_dir',type=str,default='')
     parser.add_argument('--turn',action='store_true')
+    parser.add_argument('--back_context',type=int,default=0)
+    parser.add_argument('--for_context',type=int,default=0)
+    parser.add_argument('--tok_frame_len',type=int,default=100)
+    parser.add_argument('--context_strat',type=str,default='all',help='Strategy for processing extra context: all = keep all frames, pool = mean pool frames, leading = keep leading n frames')
     args = parser.parse_args(arguments)
     if args.jobs == -1:
         args.jobs = len(os.sched_getaffinity(0))

@@ -88,14 +88,22 @@ class FixedStackInOrderRNNG(FixedStackRNNG):
                attention_composition = False,
                max_open_nts = 100,
                max_cons_nts = 3,
-               speech_feat_types = None
+               speech_feat_types = None,
+               tok_frame_len=100,
+               token_lookahead = False,
+               back_context = 0,
+               for_context = 0,
+               context_strat = 'all'
+               
   ):
     super(FixedStackInOrderRNNG, self).__init__(
         action_dict, vocab, padding_idx,
         w_dim, h_dim, num_layers,
         dropout, attention_composition,
-        max_open_nts, max_cons_nts,speech_feat_types)
-
+        max_open_nts, max_cons_nts,
+        speech_feat_types,tok_frame_len,token_lookahead,
+        back_context,for_context,context_strat)
+    print(f'token lookahead in in order model init: {token_lookahead}')
   def build_stack(self, x, batch_size = None):
     stack_size = max(150, x.size(1) + 10)
     initial_hidden = self.rnng.get_initial_hidden(x)
