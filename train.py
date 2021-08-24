@@ -165,10 +165,7 @@ def create_model(args, action_dict, vocab):
                 'attention_composition': args.composition == 'attention',
                 'speech_feat_types':args.speech_feat_types,
                 'tok_frame_len':args.tok_frame_len,
-                'token_lookahead':args.token_lookahead,
-                'back_context':args.back_context,
-                'for_context':args.for_context,
-                'context_strat':args.context_strat}
+                'token_lookahead':args.token_lookahead}
 
   print(f'model args: {model_args}')
   if args.strategy == 'top_down':

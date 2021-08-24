@@ -37,6 +37,7 @@ def bat_frame_feats(speech_feats,pitch=True,fbank=True,tok_frame_len=100,device=
     pitch_feats = [feats['pitch'] for feats in speech_feats]
     pitch_batched = [[pad_tok_frames(tok,tok_frame_len) for tok in feats] for feats in pitch_feats]
     pitch_batched = pad_batch_frames(pitch_batched,device)
+
   if fbank:
     fbank_feats = [feats['fbank'] for feats in speech_feats]
     fbank_batched  = [[pad_tok_frames(tok,tok_frame_len) for tok in feats] for feats in fbank_feats]
@@ -77,6 +78,10 @@ def get_sp_feats(args,speech_feats,device,speech_feat_types=[],tok_frame_len=Non
   if not tok_frame_len:
     tok_frame_len = args.tok_frame_len
 
+  back_context = args.back_context
+  for_context = args.for_context
+  context_strat = args.context_strat
+  
   if speech_feat_types:
     if 'pause' in speech_feat_types:
       pause = bat_pause_feats(speech_feats).to(device)
