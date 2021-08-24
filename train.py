@@ -332,6 +332,7 @@ def main(args):
         div_subword_end_mask = subword_end_mask[begin_idx:begin_idx+block_size]
         if speech_feat_types:
           div_speech_feats = speech_feats[begin_idx:begin_idx+block_size]
+
           pause,dur,frames = get_sp_feats(args,div_speech_feats,device)
         else:
           div_speech_feats = None

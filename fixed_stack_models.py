@@ -738,13 +738,9 @@ class SpeechEncoder(nn.Module):
     if 'pitch' in self.speech_feat_types or 'fbank' in self.speech_feat_types:
       conv_tokens = []
       for token in frames:
-        #print(token.shape)
         conv_frames = [convolve(token) for convolve in self.conv_modules]
-        #print(conv_frames[0].shape)
         conv_frames = [x.squeeze(-1).squeeze(-1) for x in conv_frames]
-        #print(conv_frames[0].shape)        
         conv_frames = torch.cat(conv_frames, -1)
-        #print(conv_frames.shape) 
         conv_frames = conv_frames.view(conv_frames.shape[0],1,conv_frames.shape[1]) # add a dim for num tokens (1 inside for loop)
         conv_tokens.append(conv_frames)
       conv_tokens = torch.cat(conv_tokens,dim=1)
@@ -772,11 +768,7 @@ class FixedStackRNNG(nn.Module):
                max_cons_nts = 8,
                speech_feat_types = None,
                tok_frame_len = None,
-               token_lookahead = False,
-               back_context = 0,
-               for_context = 0,
-               context_strat = 'all'
-               
+               token_lookahead = False               
   ):
     super(FixedStackRNNG, self).__init__()
     self.action_dict = action_dict
@@ -859,10 +851,6 @@ class FixedStackRNNG(nn.Module):
     self.max_open_nts = max_open_nts
     self.max_cons_nts = max_cons_nts
 
-    # Extra prosodic context handling
-    self.back_context = back_context
-    self.for_context = for_context
-    self.context_strat = context_strat
     
 
   def forward(self, x, actions, initial_stack = None, stack_size_bound = -1,
