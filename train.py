@@ -165,7 +165,9 @@ def create_model(args, action_dict, vocab):
                 'attention_composition': args.composition == 'attention',
                 'speech_feat_types':args.speech_feat_types,
                 'tok_frame_len':args.tok_frame_len,
-                'token_lookahead':args.token_lookahead}
+                'token_lookahead':args.token_lookahead,
+                'back_context':args.back_context,
+                'for_context':args.for_context}
 
   print(f'model args: {model_args}')
   if args.strategy == 'top_down':
@@ -329,7 +331,7 @@ def main(args):
         div_subword_end_mask = subword_end_mask[begin_idx:begin_idx+block_size]
         if speech_feat_types:
           div_speech_feats = speech_feats[begin_idx:begin_idx+block_size]
-
+          
           pause,dur,frames = get_sp_feats(args,div_speech_feats,device)
         else:
           div_speech_feats = None
@@ -374,7 +376,7 @@ def main(args):
                             num_divides * 2,speech_feats,args=args)
       #"""
 
-    
+
     for batch in train_data.batches():
       token_ids, speech_feats, action_ids, max_stack_size, subword_end_mask, batch_idx = batch
       batch_sizes.append(token_ids.size(0))
@@ -503,6 +505,7 @@ def eval_action_ppl(data, model, args):
   return loss, ppl, action_ppl, word_ppl
 
 if __name__ == '__main__':
+  torch.autograd.set_detect_anomaly(True)
   args = parser.parse_args()
   if args.speech_feat_types:
     args.speech_feat_types = args.speech_feat_types.split(',')

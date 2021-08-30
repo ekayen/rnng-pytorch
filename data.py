@@ -435,7 +435,7 @@ class Dataset(object):
           # that they are rare and will not affect the total speed much.
           batch_token_size = int(self.batch_token_size * 0.7)
           batch_action_size = int(self.batch_action_size * 0.7)
-        if (i > b and (  # for ensuring batch size 1
+        if (i > b and (  # for ensuring batch size 1 
             (longest_sent_len * (batch_i+1) >= batch_token_size) or
             (longest_action_len * (batch_i+1) >= batch_action_size) or
             (batch_i > 0 and batch_i % self.batch_size == 0))):

@@ -729,15 +729,27 @@ class SpeechEncoder(nn.Module):
       
   def forward(self, pause=None, dur=None, frames=None):
     all_feats = []
-    
+
     if 'pause' in self.speech_feat_types:
-      pause = self.pause_emb(pause)
+      if torch.is_tensor(pause):
+        pause = self.pause_emb(pause)
+      else:
+        pause,back_pause,for_pause = pause
+        pause = self.pause_emb(pause)
+        back_pause_emb = []
+        for_pause_emb = []
+        for tok in back_pause:
+          back_pause_emb.append(self.pause_emb(tok))
+        for tok in for_pause:
+          for_pause_emb.append(self.pause_emb(tok))
+        pause = torch.cat(back_pause_emb+[pause]+for_pause_emb,dim=-1)
       all_feats.append(pause)
     if 'dur' in self.speech_feat_types:
       all_feats.append(dur)
     if 'pitch' in self.speech_feat_types or 'fbank' in self.speech_feat_types:
       conv_tokens = []
       for token in frames:
+
         conv_frames = [convolve(token) for convolve in self.conv_modules]
         conv_frames = [x.squeeze(-1).squeeze(-1) for x in conv_frames]
         conv_frames = torch.cat(conv_frames, -1)
@@ -745,8 +757,10 @@ class SpeechEncoder(nn.Module):
         conv_tokens.append(conv_frames)
       conv_tokens = torch.cat(conv_tokens,dim=1)
       all_feats.append(conv_tokens)
-      
+
+
     speech_vecs = torch.cat(all_feats,axis=-1).type(torch.float)
+
     speech_vecs = self.ff(speech_vecs)
     return speech_vecs
 
@@ -768,9 +782,13 @@ class FixedStackRNNG(nn.Module):
                max_cons_nts = 8,
                speech_feat_types = None,
                tok_frame_len = None,
-               token_lookahead = False               
+               token_lookahead = False,
+               back_context = 0,
+               for_context = 0
+               
   ):
     super(FixedStackRNNG, self).__init__()
+
     self.action_dict = action_dict
     self.padding_idx = padding_idx
     self.action_criterion = nn.CrossEntropyLoss(reduction='none',
@@ -798,8 +816,10 @@ class FixedStackRNNG(nn.Module):
     
     if self.speech_feat_types:
       self.pause_embedding_size = 4 # TODO make configurable
+      self.output_pause_embedding_size = self.pause_embedding_size * (1 + back_context + for_context)
       self.pause_vocab_size = 8
       self.dur_size = 2
+      self.dur_size = self.dur_size * (1 + back_context + for_context)
       self.filter_sizes = [5,10,25,50]
       self.num_conv = 32
       self.num_channel_in = 1
@@ -810,7 +830,7 @@ class FixedStackRNNG(nn.Module):
       
       self.speech_emb_size = 0
       if 'pause' in self.speech_feat_types:
-        self.speech_emb_size += self.pause_embedding_size
+        self.speech_emb_size += self.output_pause_embedding_size
       if 'dur' in self.speech_feat_types:
         self.speech_emb_size += self.dur_size
       if 'pitch' in self.speech_feat_types or 'fbank' in self.speech_feat_types:
@@ -821,7 +841,7 @@ class FixedStackRNNG(nn.Module):
         self.speech_emb_size += 128
 
       self.stack_emb_size += self.speech_emb_size
-
+      print(f'stack_emb_size: {self.stack_emb_size}')
       self.speech_encoder = SpeechEncoder(frames_size = self.num_frame_feats,
                                           dur_size = self.dur_size,
                                           pause_vocab_size = self.pause_vocab_size,
@@ -877,7 +897,6 @@ class FixedStackRNNG(nn.Module):
         word_vecs = torch.cat((word_vecs,shifted),dim=-1) # concatenate word vecs with shifted word vecs, doubling embedding dim
 
       try:
-        
         input_vecs = torch.cat((word_vecs,speech_vecs),2)
       except:
         print('dims error, probably')
