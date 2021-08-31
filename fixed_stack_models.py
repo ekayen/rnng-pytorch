@@ -680,6 +680,7 @@ class RNNGCell(nn.Module):
 
     return stack.hidden_head()[..., -1]
 
+
   
 class SpeechEncoder(nn.Module):
   def __init__(self,
@@ -726,30 +727,23 @@ class SpeechEncoder(nn.Module):
 
       self.conv_modules = nn.ModuleList(conv_modules)
       self.ff = nn.Linear(self.speech_emb_size,self.speech_emb_size,bias=True)
+
+  def encode_pause(self,pause):
+    pause = self.pause_emb(pause)
+    return pause
+
       
   def forward(self, pause=None, dur=None, frames=None):
     all_feats = []
 
     if 'pause' in self.speech_feat_types:
-      if torch.is_tensor(pause):
-        pause = self.pause_emb(pause)
-      else:
-        pause,back_pause,for_pause = pause
-        pause = self.pause_emb(pause)
-        back_pause_emb = []
-        for_pause_emb = []
-        for tok in back_pause:
-          back_pause_emb.append(self.pause_emb(tok))
-        for tok in for_pause:
-          for_pause_emb.append(self.pause_emb(tok))
-        pause = torch.cat(back_pause_emb+[pause]+for_pause_emb,dim=-1)
+      pause = self.encode_pause(pause)
       all_feats.append(pause)
     if 'dur' in self.speech_feat_types:
       all_feats.append(dur)
     if 'pitch' in self.speech_feat_types or 'fbank' in self.speech_feat_types:
       conv_tokens = []
       for token in frames:
-
         conv_frames = [convolve(token) for convolve in self.conv_modules]
         conv_frames = [x.squeeze(-1).squeeze(-1) for x in conv_frames]
         conv_frames = torch.cat(conv_frames, -1)
@@ -758,14 +752,38 @@ class SpeechEncoder(nn.Module):
       conv_tokens = torch.cat(conv_tokens,dim=1)
       all_feats.append(conv_tokens)
 
-
     speech_vecs = torch.cat(all_feats,axis=-1).type(torch.float)
 
     speech_vecs = self.ff(speech_vecs)
     return speech_vecs
 
+class SpeechEncoderContext(SpeechEncoder):
+  def __init__(self,
+               frames_size = 6,
+               dur_size = 2,
+               pause_vocab_size = 7,
+               pause_emb_size = 4,
+               filter_sizes = [5,10,25,50],
+               tok_frame_len = 100,
+               num_conv = 32,
+               num_channel_in = 1,
+               dropout = None,
+               speech_feat_types = [],
+               speech_emb_size = 128):
+               
+    super(SpeechEncoderContext,self).__init__()
 
-    
+  def encode_pause(self,pause):
+    pause,back_pause,for_pause = pause
+    pause = self.pause_emb(pause)
+    back_pause_emb = []
+    for_pause_emb = []
+    for tok in back_pause:
+      back_pause_emb.append(self.pause_emb(tok))
+    for tok in for_pause:
+      for_pause_emb.append(self.pause_emb(tok))
+    pause = torch.cat(back_pause_emb+[pause]+for_pause_emb,dim=-1)
+    return pause
 
 
     
@@ -842,17 +860,30 @@ class FixedStackRNNG(nn.Module):
 
       self.stack_emb_size += self.speech_emb_size
       print(f'stack_emb_size: {self.stack_emb_size}')
-      self.speech_encoder = SpeechEncoder(frames_size = self.num_frame_feats,
-                                          dur_size = self.dur_size,
-                                          pause_vocab_size = self.pause_vocab_size,
-                                          pause_emb_size = self.pause_embedding_size,
-                                          filter_sizes = self.filter_sizes,
-                                          tok_frame_len = self.tok_frame_len,
-                                          num_conv = self.num_conv,
-                                          num_channel_in = self.num_channel_in,
-                                          dropout = dropout,
-                                          speech_feat_types = self.speech_feat_types,
-                                          speech_emb_size = self.speech_emb_size)
+      if back_context == 0 and for_context == 0:
+        self.speech_encoder = SpeechEncoder(frames_size = self.num_frame_feats,
+                                            dur_size = self.dur_size,
+                                            pause_vocab_size = self.pause_vocab_size,
+                                            pause_emb_size = self.pause_embedding_size,
+                                            filter_sizes = self.filter_sizes,
+                                            tok_frame_len = self.tok_frame_len,
+                                            num_conv = self.num_conv,
+                                            num_channel_in = self.num_channel_in,
+                                            dropout = dropout,
+                                            speech_feat_types = self.speech_feat_types,
+                                            speech_emb_size = self.speech_emb_size)
+      else:
+        self.speech_encoder = SpeechEncoderContext(frames_size = self.num_frame_feats,
+                                                   dur_size = self.dur_size,
+                                                   pause_vocab_size = self.pause_vocab_size,
+                                                   pause_emb_size = self.pause_embedding_size,
+                                                   filter_sizes = self.filter_sizes,
+                                                   tok_frame_len = self.tok_frame_len,
+                                                   num_conv = self.num_conv,
+                                                   num_channel_in = self.num_channel_in,
+                                                   dropout = dropout,
+                                                   speech_feat_types = self.speech_feat_types,
+                                                   speech_emb_size = self.speech_emb_size)
 
     
     self.rnng = RNNGCell(self.stack_emb_size, h_dim, num_layers, dropout, self.action_dict, attention_composition)
@@ -871,7 +902,6 @@ class FixedStackRNNG(nn.Module):
     self.max_open_nts = max_open_nts
     self.max_cons_nts = max_cons_nts
 
-    
 
   def forward(self, x, actions, initial_stack = None, stack_size_bound = -1,
               subword_end_mask = None, pause=None, dur=None, frames=None):
