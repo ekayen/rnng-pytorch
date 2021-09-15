@@ -165,7 +165,7 @@ def bat_pause_feats(speech_feats,back_context,for_context,device):
   #""" #EKN  
   return pause_batched.to(device)
 
-def bat_dur_feats(speech_feats,back_context,for_context):
+def bat_dur_feats(speech_feats,back_context,for_context,device=None):
   max_num_toks = 0
   dur_batched = []
   for feats in speech_feats:
@@ -173,7 +173,7 @@ def bat_dur_feats(speech_feats,back_context,for_context):
     dur_batched.append(np.stack(feats['dur']))
 
   dur_batched = [np.pad(sent,((0,max_num_toks-sent.shape[0]),(0,0)),constant_values=0) for sent in dur_batched]
-  dur_batched = np.stack(dur_batched)
+  dur_batched = torch.tensor(np.stack(dur_batched)).type(torch.float)
   #""" #EKN
   back = []
   forward = []
@@ -184,18 +184,19 @@ def bat_dur_feats(speech_feats,back_context,for_context):
         padding = i if i <= max_num_toks else max_num_toks
         shifted = dur_batched[:,:-i,:]
         shifted = np.pad(shifted,((0,0),(padding,0),(0,0)),constant_values=0)
-        back = [shifted] + back
+        back = [torch.tensor(shifted).type(torch.float).to(device)] + back
     if for_context > 0:
       forward = []
       for i in range(1,for_context+1):
         padding = i if i <= max_num_toks else max_num_toks
         shifted = dur_batched[:,i:,:]
         shifted = np.pad(shifted,((0,0),(0,padding),(0,0)),constant_values=0)
-        forward.append(shifted)
-    dur_batched = np.concatenate(back+[dur_batched]+forward,axis=-1)
+        forward.append(torch.tensor(shifted).type(torch.float).to(device))
+    #dur_batched = np.concatenate(back+[dur_batched]+forward,axis=-1)
+    return dur_batched.to(device),back,forward
   #""" #EKN
-  dur_batched = torch.tensor(dur_batched)
-  return dur_batched
+  #dur_batched = torch.tensor(dur_batched)
+  return dur_batched.to(device)
 
 def get_sp_feats(args,speech_feats,device,speech_feat_types=[],tok_frame_len=None,include_id=False):
 
@@ -220,7 +221,7 @@ def get_sp_feats(args,speech_feats,device,speech_feat_types=[],tok_frame_len=Non
     else:
       pause = None
     if 'dur' in speech_feat_types:
-      dur = bat_dur_feats(speech_feats,back_context,for_context).to(device)
+      dur = bat_dur_feats(speech_feats,back_context,for_context,device)
     else:
       dur = None
     if 'pitch' and 'fbank' in speech_feat_types:

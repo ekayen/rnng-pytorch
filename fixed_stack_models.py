@@ -732,6 +732,9 @@ class SpeechEncoder(nn.Module):
     pause = self.pause_emb(pause)
     return pause
 
+  def encode_dur(self,dur):
+    return dur
+
       
   def forward(self, pause=None, dur=None, frames=None):
     all_feats = []
@@ -740,7 +743,7 @@ class SpeechEncoder(nn.Module):
       pause = self.encode_pause(pause)
       all_feats.append(pause)
     if 'dur' in self.speech_feat_types:
-      all_feats.append(dur)
+      all_feats.append(self.encode_dur(dur))
     if 'pitch' in self.speech_feat_types or 'fbank' in self.speech_feat_types:
       conv_tokens = []
       for token in frames:
@@ -752,7 +755,6 @@ class SpeechEncoder(nn.Module):
       conv_tokens = torch.cat(conv_tokens,dim=1)
       all_feats.append(conv_tokens)
     speech_vecs = torch.cat(all_feats,axis=-1).type(torch.float)
-
     speech_vecs = self.ff(speech_vecs)
     return speech_vecs
 
@@ -768,7 +770,9 @@ class SpeechEncoderContext(SpeechEncoder):
                num_channel_in = 1,
                dropout = None,
                speech_feat_types = [],
-               speech_emb_size = 128):
+               speech_emb_size = 128,
+               back_context = 0,
+               for_context = 0):
     print(f'dropout: {dropout}')
     super(SpeechEncoderContext,self).__init__(frames_size,
                                               dur_size,
@@ -781,18 +785,40 @@ class SpeechEncoderContext(SpeechEncoder):
                                               dropout,
                                               speech_feat_types,
                                               speech_emb_size)
-
+    self.in_toks = back_context + for_context + 1
+    self.out_toks = 1
+    self.pause_ff = nn.Linear(self.in_toks,self.out_toks)
+    self.pause_relu = nn.ReLU()
+    self.dur_ff = nn.Linear(self.in_toks,self.out_toks)
+    self.dur_relu = nn.ReLU()
+    
   def encode_pause(self,pause):
     pause,back_pause,for_pause = pause
+    
     pause = self.pause_emb(pause)
     back_pause_emb = []
     for_pause_emb = []
+
     for tok in back_pause:
       back_pause_emb.append(self.pause_emb(tok))
     for tok in for_pause:
       for_pause_emb.append(self.pause_emb(tok))
-    pause = torch.cat(back_pause_emb+[pause]+for_pause_emb,dim=-1)
+
+    pause = torch.stack(back_pause_emb+[pause]+for_pause_emb,dim=-1)
+    pause = self.pause_ff(pause)
+    pause = self.pause_relu(pause)
+    pause = torch.squeeze(pause,dim=-1)
+    #pause = torch.cat(back_pause_emb+[pause]+for_pause_emb,dim=-1)
     return pause
+
+  def encode_dur(self,dur):
+    curr,back,forward = dur
+    dur = torch.stack(back+[curr]+forward,dim=-1)
+    dur = self.dur_ff(dur)
+    dur = self.dur_relu(dur)
+    dur = torch.squeeze(dur,dim=-1)
+    return dur
+  
 
 
     
@@ -843,12 +869,12 @@ class FixedStackRNNG(nn.Module):
     
     if self.speech_feat_types:
       self.pause_embedding_size = 4 # TODO make configurable
-      self.output_pause_embedding_size = self.pause_embedding_size * (1 + back_context + for_context)
-      #self.output_pause_embedding_size = self.pause_embedding_size #EKN
+      #self.output_pause_embedding_size = self.pause_embedding_size * (1 + back_context + for_context)
+      self.output_pause_embedding_size = self.pause_embedding_size #EKN
       self.pause_vocab_size = 8
       self.dur_size = 2
-      self.dur_size = self.dur_size * (1 + back_context + for_context)
-      #self.dur_size = self.dur_size #EKN
+      #self.dur_size = self.dur_size * (1 + back_context + for_context)
+      self.dur_size = self.dur_size #EKN
       self.filter_sizes = [5,10,25,50]
       self.num_conv = 32
       self.num_channel_in = 1
@@ -887,16 +913,18 @@ class FixedStackRNNG(nn.Module):
         #""" #EKN
       else:
          self.speech_encoder = SpeechEncoderContext(frames_size = self.num_frame_feats,
-                                                   dur_size = self.dur_size,
-                                                   pause_vocab_size = self.pause_vocab_size,
-                                                   pause_emb_size = self.pause_embedding_size,
-                                                   filter_sizes = self.filter_sizes,
-                                                   tok_frame_len = self.tok_frame_len,
-                                                   num_conv = self.num_conv,
-                                                   num_channel_in = self.num_channel_in,
-                                                   dropout = dropout,
-                                                   speech_feat_types = self.speech_feat_types,
-                                                   speech_emb_size = self.speech_emb_size)
+                                                    dur_size = self.dur_size,
+                                                    pause_vocab_size = self.pause_vocab_size,
+                                                    pause_emb_size = self.pause_embedding_size,
+                                                    filter_sizes = self.filter_sizes,
+                                                    tok_frame_len = self.tok_frame_len,
+                                                    num_conv = self.num_conv,
+                                                    num_channel_in = self.num_channel_in,
+                                                    dropout = dropout,
+                                                    speech_feat_types = self.speech_feat_types,
+                                                    speech_emb_size = self.speech_emb_size,
+                                                    back_context = back_context,
+                                                    for_context = for_context)
       #""" #EKN
 
     self.rnng = RNNGCell(self.stack_emb_size, h_dim, num_layers, dropout, self.action_dict, attention_composition)
