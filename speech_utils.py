@@ -36,16 +36,36 @@ def pad_batch_frames(feats,back_context,for_context,device):
     batched.append(all_tok)
   return batched
 
+def trim_repeated_frame(token,trim_front=True):
+  if trim_front:
+    return token[:,1:]
+  else:
+    return token[:,:-1]
+
+  
 
 def frame_batch_w_context(batch_feats,back_context,for_context,context_strat,tok_frame_len):
   feats_w_context = []
   for sent in batch_feats:
     sent_w_context = []
     for curr_idx,tok in enumerate(sent):
-      if context_strat == 'all':
+      if context_strat == 'all' or context_strat == 'all_boundary':
         start_idx = max(0,curr_idx-back_context)
         end_idx = min(len(sent)-1,curr_idx+for_context)
         w_context = sent[start_idx:end_idx+1]
+        
+        if len(w_context) > 1:
+          new_w_context = [w_context[0]]
+          for tok in w_context[1:]:
+            new_w_context.append(trim_repeated_frame(tok))
+          w_context = new_w_context
+        if context_strat == 'all_boundary':
+          boundary = np.zeros((w_context[0].shape[0],2))
+          new_w_context = []
+          for tok in w_context:
+            new_w_context.append(tok)
+            new_w_context.append(boundary)
+          w_context = new_w_context
         w_context = np.concatenate(w_context,axis=1)
         w_context = pad_tok_frames(w_context,tok_frame_len)
         sent_w_context.append(w_context)
@@ -55,15 +75,18 @@ def frame_batch_w_context(batch_feats,back_context,for_context,context_strat,tok
         end_idx = min(len(sent)-1,curr_idx+for_context)
         if back_context > 0:
           prev_toks = sent[start_idx:curr_idx]
+          block_size = (1,max(tok.shape[-1],1))
           prev_toks = [block_reduce(tok,block_size=(1,tok.shape[-1]),func=np.mean) for tok in prev_toks]
         else:
           prev_toks = []
         if for_context > 0:
           next_toks = sent[curr_idx+1:end_idx+1]
-          next_toks = [block_reduce(tok,block_size=(1,tok.shape[-1]),func=np.mean) for tok in next_toks]
+          block_size = (1,max(tok.shape[-1],1))
+          next_toks = [block_reduce(tok,block_size=block_size,func=np.mean) for tok in next_toks]
         else:
           next_toks = []
         w_context = np.concatenate(prev_toks+[tok]+next_toks,axis=1)
+        w_context = pad_tok_frames(w_context,tok_frame_len)
         sent_w_context.append(w_context)
       elif context_strat == 'leading':
         N = 5 # NUMBER OF LEADING FRAMES
@@ -74,6 +97,7 @@ def frame_batch_w_context(batch_feats,back_context,for_context,context_strat,tok
           w_context = np.concatenate((tok,leading_frames),axis=1)
         else:
           w_context = tok
+        w_context = pad_tok_frames(w_context,tok_frame_len)
         sent_w_context.append(w_context)
 
     feats_w_context.append(sent_w_context)
@@ -115,6 +139,7 @@ def bat_pause_feats(speech_feats,back_context,for_context,device):
   for feats in speech_feats:
     max_num_toks = max(max_num_toks,len(feats['pause']))
     pause_batched.append(np.array(feats['pause']))
+    #"""#EKN
     if back_context > 0:
       for i in range(1,back_context+1):
         padding = i if i <= max_num_toks else max_num_toks
@@ -125,24 +150,31 @@ def bat_pause_feats(speech_feats,back_context,for_context,device):
         padding = i if i <= max_num_toks else max_num_toks
         for_shifted = feats['pause'][i:] + [0]*padding 
         forward[i-1].append(np.array(for_shifted))
+    #""" #EKN
   pause_batched = torch.tensor(np.stack([np.pad(sent,((0,max_num_toks-sent.shape[0])),constant_values=0) for sent in pause_batched])).type(torch.int)
+  #""" #EKN
   if back_context > 0:
     back = [torch.tensor(np.stack([np.pad(sent,((0,max_num_toks-sent.shape[0])),constant_values=0) for sent in shift])).type(torch.int).to(device) for shift in back]
   if for_context > 0:
     forward = [torch.tensor(np.stack([np.pad(sent,((0,max_num_toks-sent.shape[0])),constant_values=0) for sent in shift])).type(torch.int).to(device) for shift in forward]
+
   if back_context == 0 and for_context == 0:
     return pause_batched.to(device)
   else:
     return pause_batched.to(device),back,forward
- 
+  #""" #EKN  
+  return pause_batched.to(device)
+
 def bat_dur_feats(speech_feats,back_context,for_context):
   max_num_toks = 0
   dur_batched = []
   for feats in speech_feats:
     max_num_toks = max(max_num_toks,len(feats['dur']))
     dur_batched.append(np.stack(feats['dur']))
+
   dur_batched = [np.pad(sent,((0,max_num_toks-sent.shape[0]),(0,0)),constant_values=0) for sent in dur_batched]
   dur_batched = np.stack(dur_batched)
+  #""" #EKN
   back = []
   forward = []
   if back_context > 0 or for_context > 0:
@@ -161,10 +193,12 @@ def bat_dur_feats(speech_feats,back_context,for_context):
         shifted = np.pad(shifted,((0,0),(0,padding),(0,0)),constant_values=0)
         forward.append(shifted)
     dur_batched = np.concatenate(back+[dur_batched]+forward,axis=-1)
+  #""" #EKN
   dur_batched = torch.tensor(dur_batched)
   return dur_batched
 
-def get_sp_feats(args,speech_feats,device,speech_feat_types=[],tok_frame_len=None):
+def get_sp_feats(args,speech_feats,device,speech_feat_types=[],tok_frame_len=None,include_id=False):
+
   if not speech_feat_types:
     speech_feat_types = args.speech_feat_types
   if not tok_frame_len:
@@ -179,8 +213,7 @@ def get_sp_feats(args,speech_feats,device,speech_feat_types=[],tok_frame_len=Non
     back_context = 0
     for_context = 0
     context_strat = 0
-    
-  
+
   if speech_feat_types:
     if 'pause' in speech_feat_types:
       pause = bat_pause_feats(speech_feats,back_context,for_context,device)
@@ -200,5 +233,11 @@ def get_sp_feats(args,speech_feats,device,speech_feat_types=[],tok_frame_len=Non
       frames = None
   else:
       pause = dur = frames = None
-  return pause,dur,frames  
+  if include_id:
+    ids = []
+    for feat in speech_feats:
+      ids.append(feat['idnum'])
+    return pause,dur,frames,ids
+  else:
+    return pause,dur,frames  
 

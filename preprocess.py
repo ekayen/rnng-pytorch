@@ -397,21 +397,45 @@ def get_data(args):
             init_idx = 0
             final_idx = len(part)-1
             for idx,prt in enumerate(part):
+                if idx > 0 and prt[0]>part[idx-1][-1]:
+                    print(part)
+                    import pdb;pdb.set_trace()
                 pau_tok.append(pau['pause_aft'][idx])
                 dur_tok.append(dur[:,idx])
-                start_idx = max(idx-back_context,init_idx)
-                end_idx = min(idx+for_context,final_idx)
-                start = part[start_idx][0]
-                end = part[end_idx][-1]
-                tmp_pit = pit[:,start:end]
-                tmp_fb = fb[:,start:end]
-                while tmp_pit.shape[-1] > args.tok_frame_len:
-                    tmp_pit = tmp_pit[:,::2]
-                    tmp_fb = tmp_pit[:,::2]
-                if context_strat == 'all': # include all frames for prev/following tokens
+                if context_strat == 'tok_only':
+                    tmp_pit = []
+                    tmp_fb = []
+                    tok_start_idx = max(0,idx-back_context)
+                    tok_end_idx = min(len(part)-1,idx+for_context)
+                    for j in range(tok_start_idx,tok_end_idx+1):
+                        start = part[j][0]
+                        end = part[j][-1]
+                        tmp_pit.append(pit[:,start:end])
+                        tmp_fb.append(fb[:,start:end])
+                    tmp_pit = np.concatenate(tmp_pit,axis=1)
+                    tmp_fb = np.concatenate(tmp_fb,axis=1)
+
+                    pit_tok.append(tmp_pit)
+                    fb_tok.append(tmp_fb)
+
+                elif context_strat == 'all': # include all frames for prev/following tokens
+                    start_idx = max(idx-back_context,init_idx)
+                    end_idx = min(idx+for_context,final_idx)
+                    start = part[start_idx][0]
+                    end = part[end_idx][-1]
+                    tmp_pit = pit[:,start:end]
+                    tmp_fb = fb[:,start:end]
+                    while tmp_pit.shape[-1] > args.tok_frame_len:
+                        tmp_pit = tmp_pit[:,::2]
+                        tmp_fb = tmp_pit[:,::2]
+
                     pit_tok.append(tmp_pit)
                     fb_tok.append(tmp_fb)
                 elif context_strat == 'pool': # Use mean pooling on prev/following tokens
+                    start = part[idx][0]
+                    end = part[idx][-1]
+                    tmp_pit = pit[:,start:end]
+                    tmp_fb = fb[:,start:end]
                     # Get any trailing tokens, mean pool them, and then append:
                     bk_pit = []
                     bk_fb = []
@@ -454,6 +478,11 @@ def get_data(args):
                     pit_tok.append(tmp_pit)
                     fb_tok.append(tmp_fb)
                 elif context_strat == 'leading': #use the first few leading frames for following (prev?) tokens
+                    start = part[idx][0]
+                    end = part[idx][-1]
+                    tmp_pit = pit[:,start:end]
+                    tmp_fb = fb[:,start:end]
+
                     N = 5 # How many leading frames to take
                     assert back_context == 0 #FOR NOW, only use this setting to test out the 'one following token' condition
                     assert for_context == 1
@@ -517,10 +546,12 @@ def get_data(args):
         test_id_file = ''
 
     print(train_id_file)
+
     """
     convert(args.testfile, args.lowercase, args.replace_num,
             0, args.minseqlength, args.outputfile + "-test.json",
             vocab, sp, action_dict, io_action_dict, 0, args.jobs,test_sp_feats,test_id_file)
+    """
     convert(args.valfile, args.lowercase, args.replace_num,
             args.seqlength, args.minseqlength, args.outputfile + "-dev.json",
             vocab, sp, action_dict, io_action_dict, 0, args.jobs,dev_sp_feats,dev_id_file)
@@ -528,7 +559,7 @@ def get_data(args):
     convert(args.trainfile, args.lowercase, args.replace_num,
             args.seqlength,  args.minseqlength, args.outputfile + "-train.json",
             vocab, sp, action_dict, io_action_dict, 1, args.jobs,train_sp_feats,train_id_file)
-
+    """
 def main(arguments):
     parser = argparse.ArgumentParser(
         description=__doc__,

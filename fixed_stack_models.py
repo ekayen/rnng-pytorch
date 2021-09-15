@@ -751,7 +751,6 @@ class SpeechEncoder(nn.Module):
         conv_tokens.append(conv_frames)
       conv_tokens = torch.cat(conv_tokens,dim=1)
       all_feats.append(conv_tokens)
-
     speech_vecs = torch.cat(all_feats,axis=-1).type(torch.float)
 
     speech_vecs = self.ff(speech_vecs)
@@ -770,8 +769,18 @@ class SpeechEncoderContext(SpeechEncoder):
                dropout = None,
                speech_feat_types = [],
                speech_emb_size = 128):
-               
-    super(SpeechEncoderContext,self).__init__()
+    print(f'dropout: {dropout}')
+    super(SpeechEncoderContext,self).__init__(frames_size,
+                                              dur_size,
+                                              pause_vocab_size,
+                                              pause_emb_size,
+                                              filter_sizes,
+                                              tok_frame_len,
+                                              num_conv,
+                                              num_channel_in,
+                                              dropout,
+                                              speech_feat_types,
+                                              speech_emb_size)
 
   def encode_pause(self,pause):
     pause,back_pause,for_pause = pause
@@ -835,9 +844,11 @@ class FixedStackRNNG(nn.Module):
     if self.speech_feat_types:
       self.pause_embedding_size = 4 # TODO make configurable
       self.output_pause_embedding_size = self.pause_embedding_size * (1 + back_context + for_context)
+      #self.output_pause_embedding_size = self.pause_embedding_size #EKN
       self.pause_vocab_size = 8
       self.dur_size = 2
       self.dur_size = self.dur_size * (1 + back_context + for_context)
+      #self.dur_size = self.dur_size #EKN
       self.filter_sizes = [5,10,25,50]
       self.num_conv = 32
       self.num_channel_in = 1
@@ -859,8 +870,9 @@ class FixedStackRNNG(nn.Module):
         self.speech_emb_size += 128
 
       self.stack_emb_size += self.speech_emb_size
-      print(f'stack_emb_size: {self.stack_emb_size}')
+      #""" #EKN
       if back_context == 0 and for_context == 0:
+        #""" #EKN
         self.speech_encoder = SpeechEncoder(frames_size = self.num_frame_feats,
                                             dur_size = self.dur_size,
                                             pause_vocab_size = self.pause_vocab_size,
@@ -872,8 +884,9 @@ class FixedStackRNNG(nn.Module):
                                             dropout = dropout,
                                             speech_feat_types = self.speech_feat_types,
                                             speech_emb_size = self.speech_emb_size)
+        #""" #EKN
       else:
-        self.speech_encoder = SpeechEncoderContext(frames_size = self.num_frame_feats,
+         self.speech_encoder = SpeechEncoderContext(frames_size = self.num_frame_feats,
                                                    dur_size = self.dur_size,
                                                    pause_vocab_size = self.pause_vocab_size,
                                                    pause_emb_size = self.pause_embedding_size,
@@ -884,8 +897,8 @@ class FixedStackRNNG(nn.Module):
                                                    dropout = dropout,
                                                    speech_feat_types = self.speech_feat_types,
                                                    speech_emb_size = self.speech_emb_size)
+      #""" #EKN
 
-    
     self.rnng = RNNGCell(self.stack_emb_size, h_dim, num_layers, dropout, self.action_dict, attention_composition)
 
 

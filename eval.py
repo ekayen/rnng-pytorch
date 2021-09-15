@@ -6,7 +6,13 @@ sent_preds = ["sent_speech.pred","sent_text.pred"]
 turn_preds = ["turn_speech.pred","turn_text.pred"]
 
 
-pred = 'dummy.pred'
+#pred = 'b0f1-frames-only-d3-lr0.0001.pred'
+#pred = 'b0f1_boundary.pred'
+pred = 'b0f1_all_feats.pred'
+#pred = 'b0f1-frames-only-d1-lr0.001.pred'
+#pred = 'b0f1-tok-only.pred'
+#pred = 'b0f1-frames-only-preproc.pred'
+#pred = 'turn_speech_rerun.pred'
 scr = scorer.Scorer()
 scr.evalb(turn_gold,pred,pred.replace('pred','eval'))
 

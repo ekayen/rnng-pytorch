@@ -63,6 +63,10 @@ parser.add_argument('--seed', default=3435, type=int)
 parser.add_argument('--fp16', action='store_true')
 parser.add_argument('--max_length_diff', default=20, type=int,
                     help='Maximum sentence length difference in a single batch does not exceed this.')
+parser.add_argument('--back_context',type=int,default=0,help='num tokens of backward PROSODIC context to include')
+parser.add_argument('--for_context',type=int,default=0,help='num tokens of forward PROSODIC context to include')
+parser.add_argument('--context_strat',type=str,default='all',help='Strategy for processing extra context: all = keep all frames, pool = mean pool frames, leading = keep leading n frames')
+
 
 def load_model(checkpoint, action_dict, vocab):
   if 'model_state_dict' in checkpoint:

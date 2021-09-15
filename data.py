@@ -184,6 +184,7 @@ class Sentence(object):
       speech_feats['pitch'] = [np.array(feat) for feat in j.get('pitch')]
       speech_feats['fbank'] = [np.array(feat) for feat in j.get('fbank')]
       speech_feats['dur'] = [np.array(feat) for feat in j.get('dur')]
+      speech_feats['idnum'] = j.get('idnum')
       jdummy= j
       sent = Sentence(j['orig_tokens'],
                     j['tokens'],
