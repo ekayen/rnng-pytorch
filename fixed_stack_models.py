@@ -796,6 +796,7 @@ class SpeechEncoderContext(SpeechEncoder):
     pause,back_pause,for_pause = pause
     
     pause = self.pause_emb(pause)
+    """
     back_pause_emb = []
     for_pause_emb = []
 
@@ -809,20 +810,20 @@ class SpeechEncoderContext(SpeechEncoder):
     pause = self.pause_relu(pause)
     pause = torch.squeeze(pause,dim=-1)
     #pause = torch.cat(back_pause_emb+[pause]+for_pause_emb,dim=-1)
+    """
     return pause
 
   def encode_dur(self,dur):
 
     curr,back,forward = dur
-    return curr
-    """
+
     dur = torch.stack(back+[curr]+forward,dim=-1)
     dur = self.dur_ff(dur)
     dur = self.dur_relu(dur)
     dur = torch.squeeze(dur,dim=-1)
 
     return dur
-    """  
+
 
 
     
