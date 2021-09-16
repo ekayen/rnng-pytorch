@@ -1,6 +1,9 @@
 venv
+*.vocab
 *.log
 *.pt
+*.pred
+*.eval
 *.amat
 *.mat
 *.out

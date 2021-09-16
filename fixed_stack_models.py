@@ -812,11 +812,13 @@ class SpeechEncoderContext(SpeechEncoder):
     return pause
 
   def encode_dur(self,dur):
+    """
     curr,back,forward = dur
     dur = torch.stack(back+[curr]+forward,dim=-1)
     dur = self.dur_ff(dur)
     dur = self.dur_relu(dur)
     dur = torch.squeeze(dur,dim=-1)
+    """
     return dur
   
 
