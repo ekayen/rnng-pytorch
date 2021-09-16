@@ -791,18 +791,30 @@ class SpeechEncoderContext(SpeechEncoder):
     self.pause_relu = nn.ReLU()
     self.dur_ff = nn.Linear(self.in_toks,self.out_toks)
     self.dur_relu = nn.ReLU()
+
+  def replace_w_int_noise(self,tens,int_range=(0,6),device=None):
+    shape = tens.shape
+    return torch.randint(low=int_range[0],high=int_range[-1],size=shape).to(device)
+
+  def replace_w_float_noise(self,tens,device=None):
+    return torch.rand(tens.shape).to(device)
+
+  def replace_w_zeros(self,tens):
+    shape = tens.shape
+    return torch.zeros(shape)
     
   def encode_pause(self,pause):
     pause,back_pause,for_pause = pause
     
     pause = self.pause_emb(pause)
-    """
     back_pause_emb = []
     for_pause_emb = []
 
     for tok in back_pause:
+      tok = self.replace_w_int_noise(tok,device=tok.device)
       back_pause_emb.append(self.pause_emb(tok))
     for tok in for_pause:
+      tok = self.replace_w_int_noise(tok,device=tok.device)
       for_pause_emb.append(self.pause_emb(tok))
 
     pause = torch.stack(back_pause_emb+[pause]+for_pause_emb,dim=-1)
@@ -810,13 +822,21 @@ class SpeechEncoderContext(SpeechEncoder):
     pause = self.pause_relu(pause)
     pause = torch.squeeze(pause,dim=-1)
     #pause = torch.cat(back_pause_emb+[pause]+for_pause_emb,dim=-1)
-    """
     return pause
 
   def encode_dur(self,dur):
 
     curr,back,forward = dur
-
+    tmp_back = []
+    tmp_forward = []
+    for bk in back:
+      tmp_back.append(self.replace_w_float_noise(bk,device=curr.device))
+    for frwrd in forward:
+      tmp_forward.append(self.replace_w_float_noise(frwrd,device=curr.device))
+    back = tmp_back
+    forward = tmp_forward
+    
+    
     dur = torch.stack(back+[curr]+forward,dim=-1)
     dur = self.dur_ff(dur)
     dur = self.dur_relu(dur)
