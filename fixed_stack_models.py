@@ -799,9 +799,9 @@ class SpeechEncoderContext(SpeechEncoder):
   def replace_w_float_noise(self,tens,device=None):
     return torch.rand(tens.shape).to(device)
 
-  def replace_w_zeros(self,tens):
+  def replace_w_zeros(self,tens,device=None):
     shape = tens.shape
-    return torch.zeros(shape)
+    return torch.zeros(shape).type(torch.long).to(device)
     
   def encode_pause(self,pause):
     pause,back_pause,for_pause = pause
@@ -812,9 +812,11 @@ class SpeechEncoderContext(SpeechEncoder):
 
     for tok in back_pause:
       tok = self.replace_w_int_noise(tok,device=tok.device)
+      #tok = self.replace_w_zeros(tok,device=tok.device)
       back_pause_emb.append(self.pause_emb(tok))
     for tok in for_pause:
       tok = self.replace_w_int_noise(tok,device=tok.device)
+      #tok = self.replace_w_zeros(tok,device=tok.device)
       for_pause_emb.append(self.pause_emb(tok))
 
     pause = torch.stack(back_pause_emb+[pause]+for_pause_emb,dim=-1)
@@ -831,8 +833,10 @@ class SpeechEncoderContext(SpeechEncoder):
     tmp_forward = []
     for bk in back:
       tmp_back.append(self.replace_w_float_noise(bk,device=curr.device))
+      #tmp_back.append(self.replace_w_zeros(bk,device=curr.device))
     for frwrd in forward:
       tmp_forward.append(self.replace_w_float_noise(frwrd,device=curr.device))
+      #tmp_forward.append(self.replace_w_zeros(frwrd,device=curr.device))
     back = tmp_back
     forward = tmp_forward
     
